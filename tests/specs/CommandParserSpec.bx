@@ -120,6 +120,27 @@ class extends="testbox.system.BaseSpec" {
 				}).error).toBe("unknown option '--region' for agent open");
 			});
 
+			it("parses down with an explicit bundle and access override", () => {
+				var result = parser.parse({
+					positionals : [ "agent", "down" ],
+					options : { file : "agent.yml", hostname : "test-agent-1", verbose : true }
+				});
+
+				expect(result.valid).toBeTrue();
+				expect(result.action).toBe("down");
+				expect(result.file).toBe("agent.yml");
+				expect(result.overrides.hostname).toBe("test-agent-1");
+				expect(result.verbose).toBeTrue();
+				expect(parser.parse({
+					positionals : [ "agent", "down" ],
+					options : {}
+				}).error).toBe("agent down requires '--file'");
+				expect(parser.parse({
+					positionals : [ "agent", "down" ],
+					options : { file : "agent.yml", size : "s-2vcpu-4gb" }
+				}).error).toBe("unknown option '--size' for agent down");
+			});
+
 			it("parses doctor with only an explicit bundle and verbose", () => {
 				var result = parser.parse({
 					positionals : [ "agent", "doctor" ],

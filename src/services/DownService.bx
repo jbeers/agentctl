@@ -1,0 +1,329 @@
+class {
+
+	function init(required any commandRunner, numeric logoutWaitMilliseconds = 10000) {
+		variables.runner = arguments.commandRunner;
+		variables.logoutWaitMilliseconds = arguments.logoutWaitMilliseconds;
+		if (variables.logoutWaitMilliseconds < 0) fail("invalid Tailscale logout wait setting");
+		return this;
+	}
+
+	function down(required struct resolved, boolean verbose = false) {
+		validateResolved(arguments.resolved);
+		if (!variables.runner.isAvailable("doctl")) fail("doctl is required to take down an agent");
+
+		var plan = arguments.resolved.plan;
+		var name = plan.values.name.value;
+		var hostname = plan.values.hostname.value;
+		announce("agent down: checking exact-name DigitalOcean resources for '" & name & "'");
+		var droplet = findDroplet(name);
+		if (!droplet.exists) {
+			return result(name, hostname, plan.derived.volumeName, "", true, false, arguments.verbose);
+		}
+
+		for (var tool in [ "ssh", "scp", "ssh-keygen" ]) {
+			if (!variables.runner.isAvailable(tool)) fail(tool & " is required to take down a running agent safely");
+		}
+		var secrets = arguments.resolved.secretValues;
+		if (!structKeyExists(secrets, "sshPrivateKey") || secrets.sshPrivateKey == "") {
+			fail("agent bundle is missing required credential: sshPrivateKey");
+		}
+
+		var identityPath = secureTempFile("agentctl-down-ssh-", ".key", secrets.sshPrivateKey);
+		try {
+			var sshOptions = buildSshArguments(identityPath);
+			var target = "root@" & hostname;
+			announce("agent down: stopping Hermes, flushing writes, and unmounting persistent state");
+			var shutdown = executeRemoteScript(
+				shutdownScript(),
+				"shutdown",
+				target,
+				sshOptions,
+				[ name ],
+				90
+			);
+			requireSafeShutdown(shutdown);
+
+			announce("agent down: scheduling best-effort Tailscale logout");
+			var logoutScheduled = scheduleLogout(target, sshOptions);
+			if (!logoutScheduled) {
+				systemOutput(
+					"Warning: Tailscale logout was not scheduled; continuing with Droplet deletion and relying on ephemeral-node cleanup.",
+					true,
+					true
+				);
+			} else if (variables.logoutWaitMilliseconds > 0) {
+				sleep(variables.logoutWaitMilliseconds);
+			}
+
+			announce("agent down: deleting exact Droplet '" & name & "' while retaining provider volume '" & plan.derived.volumeName & "'");
+			runDoctl(
+				[ "compute", "droplet", "delete", droplet.id, "--force" ],
+				"deleting the exact DigitalOcean Droplet"
+			);
+			var hostKey = variables.runner.run("ssh-keygen", [ "-R", hostname ]);
+			requireSuccess(hostKey, "removing the stale SSH host key after Droplet deletion");
+			return result(name, hostname, plan.derived.volumeName, droplet.id, false, logoutScheduled, arguments.verbose);
+		} finally {
+			deleteSensitiveFile(identityPath);
+		}
+	}
+
+	function format(required struct result) {
+		var lines = arguments.result.absent ?
+			[ "Agent '" & arguments.result.name & "' is already down.", "  Droplet: absent" ] :
+			[ "Agent '" & arguments.result.name & "' is down.", "  Droplet " & arguments.result.dropletId & ": deleted" ];
+		arrayAppend(lines, "  Provider volume " & arguments.result.volumeName & ": retained (not deleted)");
+		arrayAppend(lines, "  /workdir: discarded with disposable compute; agentctl did not inspect it");
+		arrayAppend(lines, "  Git commit/push safety: Hermes/operator responsibility; not checked by agentctl");
+		if (!arguments.result.absent) {
+			arrayAppend(lines, "  Tailscale logout: " & (arguments.result.logoutScheduled ? "scheduled" : "not scheduled; ephemeral-node cleanup required"));
+		}
+		if (arguments.result.verbose) arrayAppend(lines, "  Effective Tailscale hostname: " & arguments.result.hostname);
+		return linesToText(lines, false);
+	}
+
+	function shutdownScript() {
+		return linesToText([
+			'##!/usr/bin/env bash',
+			'set -uo pipefail',
+			'script_path=$0',
+			'cleanup() { rm -f -- "$script_path"; }',
+			'trap cleanup EXIT',
+			'agent_name=$1',
+			'[[ $agent_name =~ ^[a-z0-9][a-z0-9-]*$ ]] || exit 20',
+			'if id agent >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; then',
+			'  agent_uid=$(id -u agent)',
+			'  agent_home=$(getent passwd agent | cut -d: -f6)',
+			'  podman_as_agent() {',
+			'    runuser -u agent -- env HOME="$agent_home" XDG_RUNTIME_DIR="/run/user/$agent_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$agent_uid/bus" podman "$@"',
+			'  }',
+			'  podman_status=0',
+			'  podman_as_agent container exists hermes >/dev/null 2>&1 || podman_status=$?',
+			'  if (( podman_status == 0 )); then',
+			'    podman_as_agent stop --time 60 hermes >/dev/null || exit 20',
+			'  elif (( podman_status != 1 )); then',
+			'    exit 20',
+			'  fi',
+			'fi',
+			'sync || exit 21',
+			'mount_dir="/agent-dirs/$agent_name"',
+			'if mountpoint -q "$mount_dir"; then',
+			'  umount "$mount_dir" || exit 22',
+			'fi'
+		]);
+	}
+
+	function logoutScript() {
+		return linesToText([
+			'##!/usr/bin/env bash',
+			'set -euo pipefail',
+			'script_path=$0',
+			'cleanup() { rm -f -- "$script_path"; }',
+			'trap cleanup EXIT',
+			'tailscale_path=$(command -v tailscale)',
+			'systemd-run --quiet --collect --on-active=5s "$tailscale_path" logout'
+		]);
+	}
+
+	private function scheduleLogout(required string target, required array sshOptions) {
+		try {
+			return succeeded(executeRemoteScript(
+				logoutScript(),
+				"logout",
+				arguments.target,
+				arguments.sshOptions,
+				[],
+				15
+			));
+		} catch (error) {
+			return false;
+		}
+	}
+
+	private function executeRemoteScript(
+		required string script,
+		required string label,
+		required string target,
+		required array sshOptions,
+		array remoteArguments = [],
+		numeric timeout = 0
+	) {
+		var localPath = "";
+		var remotePath = remoteTempPath(arguments.label);
+		var transferAttempted = false;
+		try {
+			localPath = secureTempFile("agentctl-down-" & arguments.label & "-", ".sh", arguments.script);
+			transferAttempted = true;
+			var copy = variables.runner.run(
+				"scp",
+				appendArguments(arguments.sshOptions, [ "-p", localPath, arguments.target & ":" & remotePath ])
+			);
+			requireSuccess(copy, "copying the temporary " & arguments.label & " script");
+			return variables.runner.run(
+				"ssh",
+				appendArguments(
+					arguments.sshOptions,
+					appendArguments([ arguments.target, "/bin/bash", remotePath ], arguments.remoteArguments)
+				),
+				arguments.timeout,
+				arguments.timeout > 0
+			);
+		} finally {
+			var cleanupFailed = transferAttempted && !removeRemote(remotePath, arguments.target, arguments.sshOptions);
+			deleteSensitiveFile(localPath);
+			if (cleanupFailed) fail("removing the temporary remote " & arguments.label & " script failed");
+		}
+	}
+
+	private function removeRemote(required string remotePath, required string target, required array sshOptions) {
+		try {
+			return succeeded(variables.runner.run(
+				"ssh",
+				appendArguments(arguments.sshOptions, [ arguments.target, "/bin/rm", "-f", "--", arguments.remotePath ])
+			));
+		} catch (error) {
+			return false;
+		}
+	}
+
+	private function requireSafeShutdown(required struct shutdown) {
+		if (structKeyExists(arguments.shutdown, "timeout") && arguments.shutdown.timeout) {
+			fail("stopping Hermes safely timed out; Droplet deletion was blocked");
+		}
+		if (succeeded(arguments.shutdown)) return;
+		var code = structKeyExists(arguments.shutdown, "exitCode") && !isNull(arguments.shutdown.exitCode) ? arguments.shutdown.exitCode : -1;
+		if (code == 20) fail("stopping Hermes safely failed; Droplet deletion was blocked");
+		if (code == 21) fail("flushing persistent-state filesystem writes failed; Droplet deletion was blocked");
+		if (code == 22) fail("unmounting persistent state failed; Droplet deletion was blocked");
+		fail("preparing persistent state for deletion failed; Droplet deletion was blocked");
+	}
+
+	private function validateResolved(required struct resolved) {
+		if (!structKeyExists(arguments.resolved, "plan") || !structKeyExists(arguments.resolved, "secretValues")) {
+			fail("resolved agent bundle is invalid");
+		}
+		var plan = arguments.resolved.plan;
+		if (plan.values.computeProvider.value != "digitalocean") fail("agent down requires the digitalocean compute provider");
+		if (plan.values.stateStrategy.value != "provider-volume") fail("agent down requires provider-volume working state");
+		if (plan.values.accessMethod.value != "openssh-over-tailscale") fail("agent down requires OpenSSH over Tailscale");
+	}
+
+	private function findDroplet(required string name) {
+		var response = runDoctl(
+			[ "compute", "droplet", "list", "--format", "ID,Name", "--no-header" ],
+			"listing DigitalOcean Droplets"
+		);
+		var matches = [];
+		for (var row in parseRows(response.output, 2)) {
+			if (row[2] == arguments.name) arrayAppend(matches, row[1]);
+		}
+		if (arrayLen(matches) > 1) fail("multiple Droplets named '" & arguments.name & "' exist; refusing to choose one");
+		return arrayLen(matches) == 1 ? { exists : true, id : matches[1] } : { exists : false, id : "" };
+	}
+
+	private function result(
+		required string name,
+		required string hostname,
+		required string volumeName,
+		required string dropletId,
+		required boolean absent,
+		required boolean logoutScheduled,
+		required boolean verbose
+	) {
+		return {
+			name : arguments.name,
+			hostname : arguments.hostname,
+			volumeName : arguments.volumeName,
+			dropletId : arguments.dropletId,
+			absent : arguments.absent,
+			logoutScheduled : arguments.logoutScheduled,
+			verbose : arguments.verbose
+		};
+	}
+
+	private function buildSshArguments(required string identityPath) {
+		return [
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=10",
+			"-o", "StrictHostKeyChecking=accept-new",
+			"-i", arguments.identityPath
+		];
+	}
+
+	private function secureTempFile(required string prefix, required string suffix, required string content) {
+		var path = createTempFile(getSystemSetting("TMPDIR", "/tmp"), arguments.prefix, arguments.suffix);
+		try {
+			fileSetAccessMode(path, "600");
+			fileWrite(path, arguments.content);
+			return path;
+		} catch (error) {
+			deleteSensitiveFile(path);
+			rethrow;
+		}
+	}
+
+	private function deleteSensitiveFile(string path = "") {
+		if (arguments.path == "") return;
+		if (fileExists(arguments.path) && !directoryExists(arguments.path)) fileDelete(arguments.path);
+		if (fileExists(arguments.path)) fail("could not remove a sensitive temporary file");
+	}
+
+	private function remoteTempPath(required string label) {
+		return "/tmp/agentctl-down-" & arguments.label & "-" & reReplace(lCase(createUUID()), "[^a-z0-9]", "", "all") & ".sh";
+	}
+
+	private function runDoctl(required array commandArguments, required string label) {
+		var response = variables.runner.run("doctl", arguments.commandArguments);
+		requireSuccess(response, arguments.label);
+		return response;
+	}
+
+	private function requireSuccess(required struct response, required string label) {
+		if (!succeeded(arguments.response)) {
+			fail(arguments.label & (structKeyExists(arguments.response, "timeout") && arguments.response.timeout ? " timed out" : " failed"));
+		}
+	}
+
+	private function succeeded(required struct response) {
+		return structKeyExists(arguments.response, "exitCode") &&
+			!isNull(arguments.response.exitCode) &&
+			arguments.response.exitCode == 0 &&
+			(!structKeyExists(arguments.response, "timeout") || !arguments.response.timeout);
+	}
+
+	private function parseRows(required string output, required numeric columns) {
+		var rows = [];
+		var text = trim(replace(arguments.output, char(13), "", "all"));
+		if (text == "") return rows;
+		for (var line in listToArray(text, char(10), false, true)) {
+			var tokens = reMatch("[^[:space:]]+", line);
+			if (arrayLen(tokens) < arguments.columns) fail("could not parse a DigitalOcean response");
+			arrayAppend(rows, tokens);
+		}
+		return rows;
+	}
+
+	private function appendArguments(required array first, required array second) {
+		var values = [];
+		for (var value in arguments.first) arrayAppend(values, value);
+		for (var value in arguments.second) arrayAppend(values, value);
+		return values;
+	}
+
+	private function linesToText(required array lines, boolean trailingNewline = true) {
+		var text = "";
+		for (var index = 1; index <= arrayLen(arguments.lines); index++) {
+			text &= (index == 1 ? "" : char(10)) & arguments.lines[index];
+		}
+		return text & (arguments.trailingNewline ? char(10) : "");
+	}
+
+	private function announce(required string message) {
+		systemOutput(arguments.message, true);
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}

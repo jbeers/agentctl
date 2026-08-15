@@ -1,0 +1,268 @@
+import tests.support.FakeCommandRunner;
+
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("DownService", () => {
+			it("succeeds when compute is absent without materializing SSH credentials", () => {
+				var state = downState();
+				var runner = scriptedRunner(state);
+				var service = new src.services.DownService(runner, 0);
+				var result = service.down(resolvedBundle("test-agent"));
+				var output = service.format(result);
+
+				expect(result.absent).toBeTrue();
+				expect(output).toInclude("already down");
+				expect(output).toInclude("Provider volume agent-home-test-agent: retained");
+				expect(output).toInclude("/workdir: discarded");
+				expect(output).toInclude("not checked by agentctl");
+				expect(runner.getCalls()).toHaveLength(1);
+				expect(runner.getCalls()[1].executable).toBe("doctl");
+				expect(runner.getAvailabilityChecks()).toBe([ "doctl" ]);
+				expect(state.identityPath).toBe("");
+			});
+
+			it("tears down in safe order, retains the volume, and cleans keys and scripts", () => {
+				var state = downState({ droplets : "101 test-agent" });
+				var runner = scriptedRunner(state);
+				var resolved = resolvedBundle("test-agent", "test-agent-1");
+				var service = new src.services.DownService(runner, 0);
+				var result = service.down(resolved, true);
+				var output = service.format(result);
+
+				expect(result.absent).toBeFalse();
+				expect(state.events).toBe([ "shutdown", "logout", "delete", "host-key" ]);
+				expect(state.deletedId).toBe("101");
+				expect(state.volumeCalls).toBe(0);
+				expect(state.remoteRemovals).toBe(2);
+				expect(state.identityMode).toBe("600");
+				expect(state.shutdownMode).toBe("600");
+				expect(state.logoutMode).toBe("600");
+				expect(fileExists(state.identityPath)).toBeFalse();
+				expect(fileExists(state.shutdownPath)).toBeFalse();
+				expect(fileExists(state.logoutPath)).toBeFalse();
+				expect(output).toInclude("Droplet 101: deleted");
+				expect(output).toInclude("Provider volume agent-home-test-agent: retained (not deleted)");
+				expect(output).toInclude("/workdir: discarded with disposable compute");
+				expect(output).toInclude("Git commit/push safety: Hermes/operator responsibility; not checked by agentctl");
+				expect(output).toInclude("Effective Tailscale hostname: test-agent-1");
+				expect(state.shutdownScript).notToInclude("telegram");
+
+				var deletion = findCall(runner.getCalls(), "doctl", "droplet,delete,101,--force");
+				expect(deletion.arguments).toBe([ "compute", "droplet", "delete", "101", "--force" ]);
+				var hostKey = findCall(runner.getCalls(), "ssh-keygen", "-R,test-agent-1");
+				expect(hostKey.arguments).toBe([ "-R", "test-agent-1" ]);
+				for (var call in runner.getCalls()) {
+					expect(call.executable).notToBe("git");
+					var argv = jsonSerialize(call.arguments);
+					for (var secret in secretValues(resolved)) expect(argv).notToInclude(secret);
+					expect(isNull(call.input) ? "" : toString(call.input)).notToInclude("secret");
+				}
+			});
+
+			it("blocks deletion on stop, flush, and unmount failures", () => {
+				var cases = [
+					{ code : 20, message : "stopping Hermes safely failed; Droplet deletion was blocked" },
+					{ code : 21, message : "flushing persistent-state filesystem writes failed; Droplet deletion was blocked" },
+					{ code : 22, message : "unmounting persistent state failed; Droplet deletion was blocked" }
+				];
+				for (var failureCase in cases) {
+					var state = downState({ droplets : "101 test-agent", shutdownCode : failureCase.code });
+					var runner = scriptedRunner(state);
+					expect(() => new src.services.DownService(runner, 0).down(resolvedBundle("test-agent"))).toThrow(
+						message=failureCase.message
+					);
+					expect(state.events).toBe([ "shutdown" ]);
+					expect(state.deletedId).toBe("");
+					expect(fileExists(state.identityPath)).toBeFalse();
+					expect(fileExists(state.shutdownPath)).toBeFalse();
+				}
+			});
+
+			it("warns on logout failure but still deletes exact compute", () => {
+				var state = downState({ droplets : "101 test-agent", logoutFailure : true });
+				var runner = scriptedRunner(state);
+				var service = new src.services.DownService(runner, 0);
+				var result = service.down(resolvedBundle("test-agent"));
+
+				expect(result.logoutScheduled).toBeFalse();
+				expect(service.format(result)).toInclude("Tailscale logout: not scheduled; ephemeral-node cleanup required");
+				expect(state.events).toBe([ "shutdown", "logout", "delete", "host-key" ]);
+				expect(state.deletedId).toBe("101");
+			});
+
+			it("does not remove the host key when provider deletion fails", () => {
+				var state = downState({ droplets : "101 test-agent", deleteFailure : true });
+				var runner = scriptedRunner(state);
+				expect(() => new src.services.DownService(runner, 0).down(resolvedBundle("test-agent"))).toThrow(
+					message="deleting the exact DigitalOcean Droplet failed"
+				);
+
+				expect(state.events).toBe([ "shutdown", "logout", "delete" ]);
+				expect(state.volumeCalls).toBe(0);
+				expect(fileExists(state.identityPath)).toBeFalse();
+				expect(fileExists(state.shutdownPath)).toBeFalse();
+				expect(fileExists(state.logoutPath)).toBeFalse();
+			});
+
+			it("refuses duplicate exact-name Droplets before materializing a key", () => {
+				var state = downState({ droplets : "101 test-agent" & char(10) & "102 test-agent" });
+				var runner = scriptedRunner(state);
+				expect(() => new src.services.DownService(runner, 0).down(resolvedBundle("test-agent"))).toThrow(
+					message="multiple Droplets named 'test-agent' exist; refusing to choose one"
+				);
+				expect(state.identityPath).toBe("");
+				expect(state.deletedId).toBe("");
+			});
+
+			it("generates valid self-removing shutdown and logout Bash", () => {
+				var service = new src.services.DownService(new FakeCommandRunner(), 0);
+				var shutdown = service.shutdownScript();
+				var logout = service.logoutScript();
+
+				expect(systemExecute("bash", [ "-n", "-c", shutdown ]).exitCode).toBe(0);
+				expect(systemExecute("bash", [ "-n", "-c", logout ]).exitCode).toBe(0);
+				expect(left(shutdown, 20)).toBe(char(35) & "!/usr/bin/env bash" & char(10));
+				expect(left(logout, 20)).toBe(char(35) & "!/usr/bin/env bash" & char(10));
+				expect(shutdown).toInclude("stop --time 60 hermes");
+				expect(shutdown).toInclude("sync || exit 21");
+				expect(shutdown).toInclude('umount "$mount_dir" || exit 22');
+				expect(find("stop --time 60 hermes", shutdown) < find("sync || exit 21", shutdown)).toBeTrue();
+				expect(find("sync || exit 21", shutdown) < find('umount "$mount_dir" || exit 22', shutdown)).toBeTrue();
+				expect(shutdown).toInclude("trap cleanup EXIT");
+				expect(logout).toInclude("systemd-run");
+				expect(logout).toInclude("trap cleanup EXIT");
+				expect(shutdown & logout).notToInclude("telegram");
+			});
+		});
+	}
+
+	private function resolvedBundle(required string name, string hostname = "") {
+		var overrides = arguments.hostname == "" ? {} : { hostname : arguments.hostname };
+		var plan = new src.services.BundleService().parse(
+			{ version : 2, identity : { name : arguments.name } },
+			overrides
+		);
+		return {
+			plan : plan,
+			secretValues : {
+				sshPrivateKey : "-----BEGIN OPENSSH PRIVATE KEY-----" & char(10) & "test-private-material" & char(10) & "-----END OPENSSH PRIVATE KEY-----" & char(10),
+				tailscaleAuthKey : "tskey-auth-test-down",
+				registryToken : "registry-secret",
+				apiServerKey : "api-secret",
+				dashboardPassword : "dashboard-secret",
+				dashboardSecret : "signing-secret"
+			}
+		};
+	}
+
+	private function secretValues(required struct resolved) {
+		return [
+			arguments.resolved.secretValues.sshPrivateKey,
+			arguments.resolved.secretValues.tailscaleAuthKey,
+			arguments.resolved.secretValues.registryToken,
+			arguments.resolved.secretValues.apiServerKey,
+			arguments.resolved.secretValues.dashboardPassword,
+			arguments.resolved.secretValues.dashboardSecret
+		];
+	}
+
+	private function downState(struct overrides = {}) {
+		var state = {
+			droplets : "",
+			shutdownCode : 0,
+			logoutFailure : false,
+			deleteFailure : false,
+			deletedId : "",
+			volumeCalls : 0,
+			remoteRemovals : 0,
+			events : [],
+			identityPath : "",
+			identityMode : "",
+			shutdownPath : "",
+			shutdownMode : "",
+			shutdownScript : "",
+			logoutPath : "",
+			logoutMode : "",
+			logoutScript : ""
+		};
+		for (var key in structKeyArray(arguments.overrides)) state[key] = arguments.overrides[key];
+		return state;
+	}
+
+	private function scriptedRunner(required struct state) {
+		var handler = (executable, commandArguments, input) => {
+			var command = arrayToList(arguments.commandArguments, ",");
+			if (arguments.executable == "doctl") {
+				if (find("droplet,list", command) > 0) return success(state.droplets);
+				if (find("volume", command) > 0) state.volumeCalls++;
+				if (find("droplet,delete", command) > 0) {
+					arrayAppend(state.events, "delete");
+					state.deletedId = arguments.commandArguments[4];
+					return state.deleteFailure ? failure(1, "provider-secret-must-not-leak") : success();
+				}
+				return success();
+			}
+			if (arguments.executable == "scp") {
+				captureIdentity(state, arguments.commandArguments);
+				var localPath = arguments.commandArguments[arrayLen(arguments.commandArguments) - 1];
+				if (find("agentctl-down-shutdown-", localPath) > 0) {
+					state.shutdownPath = localPath;
+					state.shutdownMode = fileMode(localPath);
+					state.shutdownScript = fileRead(localPath);
+				} else {
+					state.logoutPath = localPath;
+					state.logoutMode = fileMode(localPath);
+					state.logoutScript = fileRead(localPath);
+				}
+				return success();
+			}
+			if (arguments.executable == "ssh") {
+				captureIdentity(state, arguments.commandArguments);
+				if (find("/bin/bash,/tmp/agentctl-down-shutdown-", command) > 0) {
+					arrayAppend(state.events, "shutdown");
+					return state.shutdownCode == 0 ? success() : failure(state.shutdownCode, "remote-secret-must-not-leak");
+				}
+				if (find("/bin/bash,/tmp/agentctl-down-logout-", command) > 0) {
+					arrayAppend(state.events, "logout");
+					return state.logoutFailure ? failure(1, "logout-secret-must-not-leak") : success();
+				}
+				if (find("/bin/rm,-f,--,/tmp/agentctl-down-", command) > 0) state.remoteRemovals++;
+				return success();
+			}
+			if (arguments.executable == "ssh-keygen") {
+				arrayAppend(state.events, "host-key");
+				return success();
+			}
+			return success();
+		};
+		return new FakeCommandRunner([], true, handler);
+	}
+
+	private function captureIdentity(required struct state, required array commandArguments) {
+		var identityIndex = arrayFind(arguments.commandArguments, "-i");
+		if (identityIndex == 0 || arguments.state.identityPath != "") return;
+		arguments.state.identityPath = arguments.commandArguments[identityIndex + 1];
+		arguments.state.identityMode = fileMode(arguments.state.identityPath);
+	}
+
+	private function success(string output = "") {
+		return { exitCode : 0, output : arguments.output, error : "", timeout : false };
+	}
+
+	private function failure(required numeric exitCode, string error = "failed") {
+		return { exitCode : arguments.exitCode, output : "", error : arguments.error, timeout : false };
+	}
+
+	private function findCall(required array calls, required string executable, required string commandParts) {
+		for (var call in arguments.calls) {
+			if (call.executable == arguments.executable && find(arguments.commandParts, arrayToList(call.arguments, ",")) > 0) return call;
+		}
+		throw "expected command was not called: " & arguments.executable & " " & arguments.commandParts;
+	}
+
+	private function fileMode(required string path) {
+		return trim(systemExecute("stat", [ "-c", "%a", arguments.path ]).output);
+	}
+
+}

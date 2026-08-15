@@ -11,7 +11,7 @@ class {
 		}
 
 		var action = positionals[2];
-		if (action != "inspect" && action != "init" && action != "doctor" && action != "up" && action != "open") {
+		if (action != "inspect" && action != "init" && action != "doctor" && action != "up" && action != "open" && action != "down") {
 			return invalid("unknown agent command '" & action & "'");
 		}
 		if (arrayLen(positionals) > 2) {
@@ -24,7 +24,7 @@ class {
 				"file,name,region,size,hostname,runtime-image,dashboard-username,age-recipient,verbose" :
 				action == "up" ?
 					"file,region,size,hostname,runtime-image,verbose" :
-					action == "open" ?
+					(action == "open" || action == "down") ?
 						"file,hostname,verbose" :
 						"file,verbose";
 		for (var optionName in structKeyArray(options)) {
@@ -69,9 +69,9 @@ class {
 			return result;
 		}
 
-		if (action == "inspect" || action == "up" || action == "open") {
+		if (action == "inspect" || action == "up" || action == "open" || action == "down") {
 			result.overrides = {};
-			if (action != "open") {
+			if (action != "open" && action != "down") {
 				copyOption(options, "region", result.overrides, "region");
 				copyOption(options, "size", result.overrides, "size");
 				copyOption(options, "runtime-image", result.overrides, "runtimeImage");

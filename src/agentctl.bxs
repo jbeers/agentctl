@@ -2,6 +2,7 @@ import src.models.CommandParser;
 import src.services.BundleService;
 import src.services.CommandRunner;
 import src.services.DoctorService;
+import src.services.DownService;
 import src.services.InitService;
 import src.services.OpenService;
 import src.services.UpService;
@@ -17,6 +18,7 @@ function usage(boolean errorStream = false) {
 		"  agentctl agent doctor --file <bundle> [--verbose]",
 		"  agentctl agent up --file <bundle> [options]",
 		"  agentctl agent open --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
+		"  agentctl agent down --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
 		"",
 		"Init options:",
 		"  --age-recipient <age1...>    Otherwise use the matching SOPS creation rule",
@@ -145,6 +147,12 @@ try {
 		opener = new OpenService(runner);
 		result = opener.launch(bundles.resolve(command.file, command.overrides), command.verbose);
 		systemOutput(opener.format(result), true);
+		exit(0);
+	}
+	if (command.action == "down") {
+		down = new DownService(runner);
+		result = down.down(bundles.resolveForUse(command.file, command.overrides), command.verbose);
+		systemOutput(down.format(result), true);
 		exit(0);
 	}
 
