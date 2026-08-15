@@ -34,7 +34,8 @@ class {
 		var preparedStateArchive = {};
 		var preparedWorkspaceArchive = {};
 		var archiveService = new src.services.ArchiveService(variables.runner);
-		var identityPath = "";
+		var identityService = new src.services.SshIdentityService(variables.runner);
+		var identity = {};
 		var cloudInitPath = "";
 		try {
 			if (trim(arguments.stateArchive) != "") {
@@ -45,8 +46,8 @@ class {
 				announce("agent up: validating and staging the selected workspace archive");
 				preparedWorkspaceArchive = archiveService.prepare(arguments.workspaceArchive, "workspace");
 			}
-			identityPath = secureTempFile("agentctl-up-ssh-", ".key", secrets.sshPrivateKey);
-			var publicKey = derivePublicKey(identityPath);
+			identity = identityService.prepare(secrets.sshPrivateKey, "agentctl-up-ssh-");
+			var publicKey = identity.publicKey;
 			announce("agent up: checking exact-name DigitalOcean resources for '" & name & "'");
 			var droplet = findDroplet(name);
 			var volume = findVolume(volumeName, plan.values.region.value, plan.values.stateSize.value);
@@ -79,7 +80,7 @@ class {
 			}
 
 			announce("agent up: " & (dropletCreated ? "created" : "reusing") & " Droplet '" & name & "'");
-			var sshOptions = buildSshArguments(identityPath);
+			var sshOptions = buildSshArguments(identity.path);
 			announce("agent up: waiting for OpenSSH over Tailscale at '" & hostname & "'");
 			var sshAttempts = waitForSsh(hostname, sshOptions);
 			announce("agent up: reconciling state, workspace, and the Hermes runtime");
@@ -98,12 +99,18 @@ class {
 				verbose : arguments.verbose
 			};
 		} finally {
+			var identityCleanupFailed = false;
+			try {
+				if (!structIsEmpty(identity)) identityService.remove(identity.path);
+			} catch (error) {
+				identityCleanupFailed = true;
+			}
 			deleteSensitiveFiles([
 				cloudInitPath,
-				identityPath,
 				structIsEmpty(preparedStateArchive) ? "" : preparedStateArchive.temporaryPath,
 				structIsEmpty(preparedWorkspaceArchive) ? "" : preparedWorkspaceArchive.temporaryPath
 			]);
+			if (identityCleanupFailed) fail("could not remove the temporary agent SSH identity");
 		}
 	}
 
@@ -411,21 +418,6 @@ class {
 				if (key != "sshPrivateKey") fail("agent bundle secret values must not contain newlines");
 			}
 		}
-	}
-
-	private function derivePublicKey(required string identityPath) {
-		var result = variables.runner.run(
-			"ssh-keygen",
-			[ "-y", "-P", "", "-f", arguments.identityPath ],
-			10,
-			true
-		);
-		requireSuccess(result, "deriving the agent SSH public key");
-		var publicKey = trim(result.output);
-		if (arrayLen(reMatch("^ssh-ed25519[[:space:]]+[A-Za-z0-9+/=]+", publicKey)) == 0) {
-			fail("generated agent SSH identity is invalid");
-		}
-		return publicKey;
 	}
 
 	private function findDroplet(required string name) {

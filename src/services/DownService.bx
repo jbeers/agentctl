@@ -28,9 +28,10 @@ class {
 			fail("agent bundle is missing required credential: sshPrivateKey");
 		}
 
-		var identityPath = secureTempFile("agentctl-down-ssh-", ".key", secrets.sshPrivateKey);
+		var identityService = new src.services.SshIdentityService(variables.runner);
+		var identity = identityService.prepare(secrets.sshPrivateKey, "agentctl-down-ssh-");
 		try {
-			var sshOptions = buildSshArguments(identityPath);
+			var sshOptions = buildSshArguments(identity.path);
 			var target = "root@" & hostname;
 			announce("agent down: stopping Hermes, flushing writes, and unmounting persistent state");
 			var shutdown = executeRemoteScript(
@@ -64,7 +65,7 @@ class {
 			requireSuccess(hostKey, "removing the stale SSH host key after Droplet deletion");
 			return result(name, hostname, plan.derived.volumeName, droplet.id, false, logoutScheduled, arguments.verbose);
 		} finally {
-			deleteSensitiveFile(identityPath);
+			identityService.remove(identity.path);
 		}
 	}
 

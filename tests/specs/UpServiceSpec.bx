@@ -287,6 +287,8 @@ class extends="testbox.system.BaseSpec" {
 				expect(state.readinessCalls).toBe(3);
 				var removal = findCall(runner.getCalls(), "ssh-keygen", "-R,test-agent");
 				expect(removal.arguments).toBe([ "-R", "test-agent" ]);
+				var retry = findCall(runner.getCalls(), "ssh", "StrictHostKeyChecking=accept-new");
+				expect(retry.arguments).toInclude("root@test-agent");
 			});
 
 			it("reports DigitalOcean's forced root-password change without exhausting retries", () => {

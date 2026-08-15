@@ -1,0 +1,93 @@
+class {
+
+	function init(required any commandRunner) {
+		variables.runner = arguments.commandRunner;
+		variables.identities = new src.services.SshIdentityService(arguments.commandRunner);
+		return this;
+	}
+
+	function connect(required struct resolved, boolean verbose = false) {
+		validateResolved(arguments.resolved);
+		if (!variables.runner.isAvailable("ssh")) fail("ssh is required to access a running agent");
+		if (!variables.runner.isAvailable("ssh-keygen")) fail("ssh-keygen is required to validate the agent SSH identity");
+
+		var identity = {};
+		var hostname = arguments.resolved.plan.values.hostname.value;
+		var target = "root@" & hostname;
+		try {
+			identity = variables.identities.prepare(arguments.resolved.secretValues.sshPrivateKey);
+			var result = {};
+			try {
+				result = variables.runner.run(
+					"ssh",
+					[
+						"-o", "BatchMode=yes",
+						"-o", "ConnectTimeout=10",
+						"-o", "StrictHostKeyChecking=accept-new",
+						"-o", "IdentitiesOnly=yes",
+						"-i", identity.path,
+						"-t", target
+					],
+					0,
+					false,
+					null,
+					null,
+					null,
+					true,
+					{},
+					true
+				);
+			} catch (error) {
+				fail("interactive SSH session failed; verify Tailscale connectivity and run agent up if the disposable host was replaced");
+			}
+			if (!succeeded(result)) {
+				var errorText = structKeyExists(result, "error") && !isNull(result.error) && isSimpleValue(result.error) ? uCase(toString(result.error)) : "";
+				if (find("REMOTE HOST IDENTIFICATION HAS CHANGED", errorText) > 0 || find("HOST KEY VERIFICATION FAILED", errorText) > 0) {
+					fail("SSH host key does not match; run agent up with the same bundle to verify the disposable host and reconcile its host key");
+				}
+				fail("interactive SSH session failed; verify Tailscale connectivity and run agent up if the disposable host was replaced");
+			}
+			return { target : target, verbose : arguments.verbose };
+		} finally {
+			if (!structIsEmpty(identity)) variables.identities.remove(identity.path);
+		}
+	}
+
+	function format(required struct result) {
+		return "SSH session to " & arguments.result.target & " ended" &
+			(arguments.result.verbose ? " using OpenSSH over Tailscale" : "") & ".";
+	}
+
+	private function validateResolved(required struct resolved) {
+		if (!structKeyExists(arguments.resolved, "plan") || !structKeyExists(arguments.resolved, "secretValues")) {
+			fail("resolved agent bundle is invalid");
+		}
+		var plan = arguments.resolved.plan;
+		if (!structKeyExists(plan, "values") || !structKeyExists(plan.values, "hostname") || !structKeyExists(plan.values.hostname, "value")) {
+			fail("resolved agent bundle is invalid");
+		}
+		if (trim(plan.values.hostname.value) == "") fail("agent bundle is missing a Tailscale hostname");
+		if (
+			!structKeyExists(plan.values, "accessMethod") ||
+			!structKeyExists(plan.values.accessMethod, "value") ||
+			plan.values.accessMethod.value != "openssh-over-tailscale"
+		) {
+			fail("agent ssh requires OpenSSH over Tailscale access");
+		}
+		if (!structKeyExists(arguments.resolved.secretValues, "sshPrivateKey") || arguments.resolved.secretValues.sshPrivateKey == "") {
+			fail("agent bundle is missing required credential: sshPrivateKey");
+		}
+	}
+
+	private function succeeded(required struct result) {
+		return structKeyExists(arguments.result, "exitCode") &&
+			!isNull(arguments.result.exitCode) &&
+			arguments.result.exitCode == 0 &&
+			(!structKeyExists(arguments.result, "timeout") || !arguments.result.timeout);
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}

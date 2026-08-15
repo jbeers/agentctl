@@ -9,6 +9,9 @@ class extends="testbox.system.BaseSpec" {
 					if (arguments.executable == "sops") {
 						return { exitCode : 0, output : validBundle(), error : "", timeout : false };
 					}
+					if (arguments.executable == "ssh-keygen") {
+						return { exitCode : 0, output : "ssh-ed25519 AAAATESTPUBLIC agentctl:encrypted-agent", error : "", timeout : false };
+					}
 					return { exitCode : 0, output : "", error : "", timeout : false };
 				};
 				var runner = new FakeCommandRunner([], {}, handler);

@@ -1,6 +1,6 @@
 # agentctl
 
-`agentctl` provisions disposable Hermes coding agents. The V2 implementation initializes, inspects, diagnoses, brings up, and safely takes down a private Hermes VM from one portable encrypted bundle.
+`agentctl` provisions disposable Hermes coding agents. The V2 implementation initializes, inspects, diagnoses, brings up, accesses, and safely takes down a private Hermes VM from one portable encrypted bundle.
 
 ## Build and test
 
@@ -34,9 +34,10 @@ The wizard asks for the agent name, target bundle, public settings, and age reci
 ./bin/agentctl agent doctor --file agents/sample-agent.agent.yml
 ./bin/agentctl agent up --file agents/sample-agent.agent.yml
 ./bin/agentctl agent open --file agents/sample-agent.agent.yml
+./bin/agentctl agent ssh --file agents/sample-agent.agent.yml
 ./bin/agentctl agent down --file agents/sample-agent.agent.yml
 ```
 
 Initialization validates SOPS and local decryption before prompting for credentials, generates an agent-specific Ed25519 identity, and publishes the bundle atomically with mode `0600`. Inspection resolves a redacted plan. Doctor checks bundle credentials, local tools, the SSH identity, browser support, and read-only DigitalOcean authentication. `up` can securely restore local archives into fresh `/opt/data` and disposable `/workdir`, create billable DigitalOcean resources, and succeeds only after private SSH/Tailscale access and Hermes health are ready.
 
-See [Agent bundles and inspection](docs/agent-bundles.md), [Bring up an agent](docs/agent-up.md), [Workspace and Compose](docs/compose-workspace.md), and [Take an agent down safely](docs/agent-down.md).
+See [Agent bundles and inspection](docs/agent-bundles.md), [Bring up an agent](docs/agent-up.md), [Access a running agent](docs/agent-access.md), [Workspace and Compose](docs/compose-workspace.md), and [Take an agent down safely](docs/agent-down.md).

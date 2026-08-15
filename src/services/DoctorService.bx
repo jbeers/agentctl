@@ -79,25 +79,21 @@ class {
 	}
 
 	private function checkPrivateKey(required string privateKey, required array failures) {
-		var path = createTempFile(getSystemSetting("TMPDIR", "/tmp"), ".agentctl-doctor-ssh-", ".key");
+		var identities = new src.services.SshIdentityService(variables.runner);
+		var identity = {};
+		var failed = false;
 		try {
-			fileSetAccessMode(path, "600");
-			fileWrite(path, arguments.privateKey);
-			var result = {};
-			try {
-				result = variables.runner.run(
-					"ssh-keygen",
-					[ "-y", "-P", "", "-f", path ]
-				);
-			} catch (keyError) {
-				result = { exitCode : 1 };
-			}
-			if (!succeeded(result)) {
-				arrayAppend(arguments.failures, "bundle: SSH private key is invalid or passphrase-protected");
-			}
+			identity = identities.prepare(arguments.privateKey, ".agentctl-doctor-ssh-");
+		} catch (error) {
+			failed = true;
 		} finally {
-			if (fileExists(path)) fileDelete(path);
+			try {
+				if (!structIsEmpty(identity)) identities.remove(identity.path);
+			} catch (error) {
+				failed = true;
+			}
 		}
+		if (failed) arrayAppend(arguments.failures, "bundle: SSH private key is invalid or passphrase-protected");
 	}
 
 	private function safeMessage(required any error) {

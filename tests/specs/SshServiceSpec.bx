@@ -1,0 +1,154 @@
+import tests.support.FakeCommandRunner;
+
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("SshService", () => {
+			it("opens a root repair shell through the effective Tailscale hostname with a temporary identity", () => {
+				var state = { identityPaths : [], identityModes : [] };
+				var runner = sshRunner(state);
+				var service = new src.services.SshService(runner);
+				var resolved = resolvedBundle("test-agent", "test-agent-1");
+
+				var first = service.connect(resolved, true);
+				service.connect(resolved);
+				var output = service.format(first);
+
+				expect(first.target).toBe("root@test-agent-1");
+				expect(output).toBe("SSH session to root@test-agent-1 ended using OpenSSH over Tailscale.");
+				expect(state.identityPaths).toHaveLength(2);
+				expect(state.identityPaths[1]).notToBe(state.identityPaths[2]);
+				expect(state.identityModes).toBe([ "600", "600" ]);
+				for (var path in state.identityPaths) expect(fileExists(path)).toBeFalse();
+
+				var sshCalls = callsFor(runner.getCalls(), "ssh");
+				expect(sshCalls).toHaveLength(2);
+				for (var call in sshCalls) {
+					expect(call.inheritIO).toBeTrue();
+					expect(call.arguments).toInclude("-t");
+					expect(call.arguments).toInclude("StrictHostKeyChecking=accept-new");
+					expect(call.arguments).toInclude("IdentitiesOnly=yes");
+					expect(call.arguments[arrayLen(call.arguments)]).toBe("root@test-agent-1");
+				}
+				expect(runner.getAvailabilityChecks()).notToInclude("doctl");
+				for (var call in runner.getCalls()) {
+					expect(jsonSerialize(call.arguments)).notToInclude("test-private-material");
+				}
+				expect(output).notToInclude("test-private-material");
+			});
+
+			it("keeps a mismatched known-host entry and directs replacement through up", () => {
+				var state = { identityPaths : [], identityModes : [], sshFailure : true };
+				var runner = sshRunner(state);
+				var service = new src.services.SshService(runner);
+
+				expect(() => service.connect(resolvedBundle("test-agent"))).toThrow(
+					message="SSH host key does not match; run agent up with the same bundle to verify the disposable host and reconcile its host key"
+				);
+				expect(state.identityPaths).toHaveLength(1);
+				expect(fileExists(state.identityPaths[1])).toBeFalse();
+				for (var call in runner.getCalls()) {
+					expect(arrayToList(call.arguments, ",")).notToInclude("-R,test-agent");
+					expect(jsonSerialize(call.arguments)).notToInclude("private-key-material-must-not-leak");
+				}
+			});
+
+			it("cleans the identity when SSH is interrupted and sanitizes the failure", () => {
+				var state = { identityPaths : [], identityModes : [], throwOnSsh : true };
+				var runner = sshRunner(state);
+
+				expect(() => new src.services.SshService(runner).connect(resolvedBundle("test-agent"))).toThrow(
+					message="interactive SSH session failed; verify Tailscale connectivity and run agent up if the disposable host was replaced"
+				);
+				expect(fileExists(state.identityPaths[1])).toBeFalse();
+			});
+
+			it("reports missing tools, key material, hostname, and invalid identities safely", () => {
+				var resolved = resolvedBundle("test-agent");
+				expect(() => new src.services.SshService(
+					new FakeCommandRunner([], { ssh : false, "ssh-keygen" : true })
+				).connect(resolved)).toThrow(message="ssh is required to access a running agent");
+				expect(() => new src.services.SshService(
+					new FakeCommandRunner([], { ssh : true, "ssh-keygen" : false })
+				).connect(resolved)).toThrow(message="ssh-keygen is required to validate the agent SSH identity");
+
+				var missingKey = resolvedBundle("test-agent");
+				missingKey.secretValues.sshPrivateKey = "";
+				expect(() => new src.services.SshService(new FakeCommandRunner()).connect(missingKey)).toThrow(
+					message="agent bundle is missing required credential: sshPrivateKey"
+				);
+
+				var missingHostname = resolvedBundle("test-agent");
+				missingHostname.plan.values.hostname.value = "";
+				expect(() => new src.services.SshService(new FakeCommandRunner()).connect(missingHostname)).toThrow(
+					message="agent bundle is missing a Tailscale hostname"
+				);
+
+				var state = { identityPaths : [], identityModes : [], invalidKey : true };
+				expect(() => new src.services.SshService(sshRunner(state)).connect(resolved)).toThrow(
+					message="agent SSH private key is invalid or passphrase-protected"
+				);
+				expect(fileExists(state.identityPaths[1])).toBeFalse();
+			});
+		});
+	}
+
+	private function resolvedBundle(required string name, string hostname = "") {
+		var plan = new src.services.BundleService().parse(
+			{ version : 2, identity : { name : arguments.name } },
+			arguments.hostname == "" ? {} : { hostname : arguments.hostname }
+		);
+		return {
+			plan : plan,
+			secretValues : {
+				sshPrivateKey : "-----BEGIN OPENSSH PRIVATE KEY-----" & char(10) &
+					"test-private-material" & char(10) &
+					"-----END OPENSSH PRIVATE KEY-----" & char(10)
+			}
+		};
+	}
+
+	private function sshRunner(required struct state) {
+		var handler = (executable, commandArguments, input) => {
+			if (arguments.executable == "ssh-keygen") {
+				var path = arguments.commandArguments[5];
+				arrayAppend(state.identityPaths, path);
+				arrayAppend(state.identityModes, fileMode(path));
+				return structKeyExists(state, "invalidKey") && state.invalidKey ?
+					failure(1, "private-key-material-must-not-leak") :
+					success("ssh-ed25519 AAAATESTPUBLIC agentctl:test-agent");
+			}
+			if (arguments.executable == "ssh") {
+				if (structKeyExists(state, "throwOnSsh") && state.throwOnSsh) {
+					throw "private-key-material-must-not-leak";
+				}
+				if (structKeyExists(state, "sshFailure") && state.sshFailure) {
+					return failure(255, "REMOTE HOST IDENTIFICATION HAS CHANGED private-key-material-must-not-leak");
+				}
+			}
+			return success();
+		};
+		return new FakeCommandRunner([], { ssh : true, "ssh-keygen" : true, doctl : false }, handler);
+	}
+
+	private function callsFor(required array calls, required string executable) {
+		var matches = [];
+		for (var call in arguments.calls) {
+			if (call.executable == arguments.executable) arrayAppend(matches, call);
+		}
+		return matches;
+	}
+
+	private function success(string output = "") {
+		return { exitCode : 0, output : arguments.output, error : "", timeout : false };
+	}
+
+	private function failure(required numeric exitCode, string error = "failed") {
+		return { exitCode : arguments.exitCode, output : "", error : arguments.error, timeout : false };
+	}
+
+	private function fileMode(required string path) {
+		return trim(systemExecute("stat", [ "-c", "%a", arguments.path ]).output);
+	}
+
+}

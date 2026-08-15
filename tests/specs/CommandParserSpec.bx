@@ -127,6 +127,26 @@ class extends="testbox.system.BaseSpec" {
 				}).error).toBe("unknown option '--region' for agent open");
 			});
 
+			it("parses ssh with an explicit bundle and hostname override", () => {
+				var result = parser.parse({
+					positionals : [ "agent", "ssh" ],
+					options : { file : "agent.yml", hostname : "test-agent-1", verbose : true }
+				});
+
+				expect(result.valid).toBeTrue();
+				expect(result.action).toBe("ssh");
+				expect(result.overrides.hostname).toBe("test-agent-1");
+				expect(result.verbose).toBeTrue();
+				expect(parser.parse({
+					positionals : [ "agent", "ssh" ],
+					options : {}
+				}).error).toBe("agent ssh requires '--file'");
+				expect(parser.parse({
+					positionals : [ "agent", "ssh" ],
+					options : { file : "agent.yml", region : "fra1" }
+				}).error).toBe("unknown option '--region' for agent ssh");
+			});
+
 			it("parses down with an explicit bundle and access override", () => {
 				var result = parser.parse({
 					positionals : [ "agent", "down" ],

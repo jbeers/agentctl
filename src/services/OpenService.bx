@@ -6,6 +6,15 @@ class {
 	}
 
 	function launch(required struct plan, boolean verbose = false) {
+		if (
+			!structKeyExists(arguments.plan, "values") ||
+			!structKeyExists(arguments.plan.values, "hostname") ||
+			!structKeyExists(arguments.plan.values.hostname, "value")
+		) {
+			fail("resolved agent bundle is invalid");
+		}
+		if (trim(arguments.plan.values.hostname.value) == "") fail("agent bundle is missing a Tailscale hostname");
+
 		var launcher = "";
 		if (variables.runner.isAvailable("xdg-open")) {
 			launcher = "xdg-open";

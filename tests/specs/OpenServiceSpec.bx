@@ -47,13 +47,18 @@ class extends="testbox.system.BaseSpec" {
 				);
 			});
 
-			it("fails clearly when no browser launcher is installed", () => {
-				var runner = new FakeCommandRunner([], { "xdg-open" : false, open : false });
+			it("fails clearly when the hostname or browser launcher is missing", () => {
 				var plan = new src.services.BundleService().parse({
 					version : 2,
 					identity : { name : "test-agent" }
 				});
+				plan.values.hostname.value = "";
+				expect(() => new src.services.OpenService(new FakeCommandRunner()).launch(plan)).toThrow(
+					message="agent bundle is missing a Tailscale hostname"
+				);
 
+				plan.values.hostname.value = "test-agent";
+				var runner = new FakeCommandRunner([], { "xdg-open" : false, open : false });
 				expect(() => new src.services.OpenService(runner).launch(plan)).toThrow(
 					message="no supported browser launcher found; install xdg-open or open"
 				);

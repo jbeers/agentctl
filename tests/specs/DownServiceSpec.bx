@@ -48,6 +48,8 @@ class extends="testbox.system.BaseSpec" {
 				expect(output).toInclude("Effective Tailscale hostname: test-agent-1");
 				expect(state.shutdownScript).notToInclude("telegram");
 
+				var validation = findCall(runner.getCalls(), "ssh-keygen", "-y,-P,,-f");
+				expect(validation.arguments[5]).toBe(state.identityPath);
 				var deletion = findCall(runner.getCalls(), "doctl", "droplet,delete,101,--force");
 				expect(deletion.arguments).toBe([ "compute", "droplet", "delete", "101", "--force" ]);
 				var hostKey = findCall(runner.getCalls(), "ssh-keygen", "-R,test-agent-1");
@@ -231,6 +233,11 @@ class extends="testbox.system.BaseSpec" {
 				return success();
 			}
 			if (arguments.executable == "ssh-keygen") {
+				if (arguments.commandArguments[1] == "-y") {
+					state.identityPath = arguments.commandArguments[5];
+					state.identityMode = fileMode(state.identityPath);
+					return success("ssh-ed25519 AAAATESTPUBLIC agentctl:test-agent");
+				}
 				arrayAppend(state.events, "host-key");
 				return success();
 			}

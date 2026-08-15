@@ -90,20 +90,6 @@ Local cloud-init, SSH identity, runtime-script, secret-payload, and optional sta
 
 `/opt/data` is retained on the provider volume. `/workdir` remains part of disposable compute; commit and push work that must survive a future `down`.
 
-## Open the Hermes dashboard
+## Access the running agent
 
-After `up` succeeds, launch the private dashboard in the system browser:
-
-```bash
-./bin/agentctl agent open --file agents/sample-agent.agent.yml
-```
-
-`open` uses the bundle's effective Tailscale hostname and port `9119`. It invokes `xdg-open` on Linux or `open` on macOS and does not contact DigitalOcean. A per-command hostname override is useful while resolving a temporary MagicDNS collision:
-
-```bash
-./bin/agentctl agent open \
-  --file agents/sample-agent.agent.yml \
-  --hostname sample-agent-1
-```
-
-Dashboard credentials are not placed in the URL or browser command; sign in through the Hermes UI.
+After `up` succeeds, `agent ssh` opens an interactive root repair session over Tailscale and `agent open` launches the private Hermes dashboard. See [Access a running agent](agent-access.md).

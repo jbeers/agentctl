@@ -25,6 +25,7 @@ class {
 		arrayAppend(variables.calls, {
 			executable : arguments.executable,
 			arguments : arguments.commandArguments,
+			inheritIO : arguments.inheritIO,
 			input : arguments.input
 		});
 		if (!isNull(variables.handler)) {

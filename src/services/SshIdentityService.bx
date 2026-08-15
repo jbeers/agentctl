@@ -1,0 +1,55 @@
+class {
+
+	function init(required any commandRunner) {
+		variables.runner = arguments.commandRunner;
+		return this;
+	}
+
+	function prepare(required string privateKey, string prefix = "agentctl-ssh-") {
+		if (arguments.privateKey == "") fail("agent bundle is missing required credential: sshPrivateKey");
+		var path = "";
+		try {
+			path = createTempFile(getSystemSetting("TMPDIR", "/tmp"), arguments.prefix, ".key");
+			fileSetAccessMode(path, "600");
+			fileWrite(path, arguments.privateKey);
+		} catch (error) {
+			remove(path);
+			fail("could not materialize the agent SSH identity");
+		}
+
+		var result = {};
+		try {
+			result = variables.runner.run("ssh-keygen", [ "-y", "-P", "", "-f", path ], 10, true);
+		} catch (error) {
+			result = { exitCode : 1 };
+		}
+		var publicKey = succeeded(result) && structKeyExists(result, "output") && !isNull(result.output) ? trim(result.output) : "";
+		if (arrayLen(reMatch("^ssh-ed25519[[:space:]]+[A-Za-z0-9+/=]+", publicKey)) == 0) {
+			remove(path);
+			fail("agent SSH private key is invalid or passphrase-protected");
+		}
+		return { path : path, publicKey : publicKey };
+	}
+
+	function remove(string path = "") {
+		if (arguments.path == "") return;
+		try {
+			if (fileExists(arguments.path) && !directoryExists(arguments.path)) fileDelete(arguments.path);
+		} catch (error) {
+			fail("could not remove the temporary agent SSH identity");
+		}
+		if (fileExists(arguments.path)) fail("could not remove the temporary agent SSH identity");
+	}
+
+	private function succeeded(required struct result) {
+		return structKeyExists(arguments.result, "exitCode") &&
+			!isNull(arguments.result.exitCode) &&
+			arguments.result.exitCode == 0 &&
+			(!structKeyExists(arguments.result, "timeout") || !arguments.result.timeout);
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}
