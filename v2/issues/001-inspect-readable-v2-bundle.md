@@ -17,20 +17,20 @@ This slice should reuse the current parser, configuration service, and argv-base
 
 ## Acceptance criteria
 
-- [ ] `agent inspect` accepts an explicit agent bundle path and performs no cloud or remote command.
-- [ ] A version 2 plaintext fixture with no secrets can be parsed for structural tests.
-- [ ] A partially SOPS-encrypted fixture is decrypted directly from command output and is never written as plaintext.
-- [ ] Non-secret fields remain readable in the encrypted source file.
-- [ ] Unknown keys, wrong value types, unsupported versions, and missing required identity fields fail with focused messages.
-- [ ] Empty optional values do not create hidden overrides.
-- [ ] Inspection shows the agent name, compute provider and size, region, hostname, runtime image, access method, working-state strategy, derived Droplet and volume names, and what `down` retains.
-- [ ] Every effective non-secret value is labeled as coming from the bundle, a CLI argument, or a built-in default.
-- [ ] Secret fields are represented only as configured, missing, or generated; values and ciphertext are never printed.
-- [ ] Archive options are shown as per-invocation inputs rather than persistent bundle configuration.
-- [ ] The canonical workflow requires explicit bundle selection; V2 inspection does not scan the current directory for an arbitrary agent file.
-- [ ] Errors and verbose diagnostics do not include decrypted content or private-key material.
-- [ ] Unit tests cover plaintext, encrypted, malformed, unknown-key, missing-tool, and redaction behavior.
-- [ ] Existing V1 behavior remains untouched by this slice unless a clear unsupported-version message is needed at the V2 entry point.
+- [x] `agent inspect` accepts an explicit agent bundle path and performs no cloud or remote command.
+- [x] A version 2 plaintext fixture with no secrets can be parsed for structural tests.
+- [x] A partially SOPS-encrypted fixture is decrypted directly from command output and is never written as plaintext.
+- [x] Non-secret fields remain readable in the encrypted source file.
+- [x] Unknown keys, wrong value types, unsupported versions, and missing required identity fields fail with focused messages.
+- [x] Empty optional values do not create hidden overrides.
+- [x] Inspection shows the agent name, compute provider and size, region, hostname, runtime image, access method, working-state strategy, derived Droplet and volume names, and what `down` retains.
+- [x] Every effective non-secret value is labeled as coming from the bundle, a CLI argument, or a built-in default.
+- [x] Secret fields are represented only as configured, missing, or generated; values and ciphertext are never printed.
+- [x] Archive options are shown as per-invocation inputs rather than persistent bundle configuration.
+- [x] The canonical workflow requires explicit bundle selection; V2 inspection does not scan the current directory for an arbitrary agent file.
+- [x] Errors and verbose diagnostics do not include decrypted content or private-key material.
+- [x] Unit tests cover plaintext, encrypted, malformed, unknown-key, missing-tool, and redaction behavior.
+- [x] Existing V1 behavior remains untouched by this slice unless a clear unsupported-version message is needed at the V2 entry point.
 
 ## Blocked by
 
