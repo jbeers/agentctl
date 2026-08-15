@@ -3,6 +3,8 @@ import src.services.BundleService;
 import src.services.CommandRunner;
 import src.services.DoctorService;
 import src.services.InitService;
+import src.services.OpenService;
+import src.services.UpService;
 
 function usage(boolean errorStream = false) {
 	var lines = [
@@ -13,6 +15,8 @@ function usage(boolean errorStream = false) {
 		"  agentctl agent init --name <name> --file <bundle> [options]",
 		"  agentctl agent inspect --file <bundle> [options]",
 		"  agentctl agent doctor --file <bundle> [--verbose]",
+		"  agentctl agent up --file <bundle> [options]",
+		"  agentctl agent open --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
 		"",
 		"Init options:",
 		"  --age-recipient <age1...>    Otherwise use the matching SOPS creation rule",
@@ -22,11 +26,13 @@ function usage(boolean errorStream = false) {
 		"  --runtime-image <image:tag>",
 		"  --dashboard-username <name>",
 		"",
-		"Inspect options:",
+		"Inspect/up options:",
 		"  --region <region>",
 		"  --size <droplet-size>",
 		"  --hostname <tailscale-hostname>",
 		"  --runtime-image <image:tag>",
+		"",
+		"Inspect-only options:",
 		"  --state-archive <path>       Per invocation; never stored in the bundle",
 		"  --workspace-archive <path>   Per invocation; never stored in the bundle",
 		"",
@@ -128,6 +134,18 @@ try {
 		result = doctor.check(command.file);
 		systemOutput(doctor.format(result), true, !result.healthy);
 		exit(result.healthy ? 0 : 1);
+	}
+	if (command.action == "up") {
+		up = new UpService(runner);
+		result = up.up(bundles.resolveForUse(command.file, command.overrides), command.verbose);
+		systemOutput(up.format(result), true);
+		exit(0);
+	}
+	if (command.action == "open") {
+		opener = new OpenService(runner);
+		result = opener.launch(bundles.resolve(command.file, command.overrides), command.verbose);
+		systemOutput(opener.format(result), true);
+		exit(0);
 	}
 
 	initializer = new InitService(runner, bundles);

@@ -1,6 +1,6 @@
 # agentctl
 
-`agentctl` provisions disposable Hermes coding agents. The current V2 implementation can initialize, inspect, and locally diagnose a portable encrypted agent bundle without creating cloud resources.
+`agentctl` provisions disposable Hermes coding agents. The V2 implementation initializes, inspects, diagnoses, and brings up a private Hermes VM from one portable encrypted bundle.
 
 ## Build and test
 
@@ -32,8 +32,10 @@ The wizard asks for the agent name, target bundle, public settings, and age reci
 
 ./bin/agentctl agent inspect --file agents/sample-agent.agent.yml
 ./bin/agentctl agent doctor --file agents/sample-agent.agent.yml
+./bin/agentctl agent up --file agents/sample-agent.agent.yml
+./bin/agentctl agent open --file agents/sample-agent.agent.yml
 ```
 
-Initialization validates SOPS and local decryption before prompting for credentials, generates an agent-specific Ed25519 identity, and publishes the bundle atomically with mode `0600`. Inspection resolves a redacted plan. Doctor checks bundle credentials, local tools, the SSH identity, browser support, and read-only DigitalOcean authentication.
+Initialization validates SOPS and local decryption before prompting for credentials, generates an agent-specific Ed25519 identity, and publishes the bundle atomically with mode `0600`. Inspection resolves a redacted plan. Doctor checks bundle credentials, local tools, the SSH identity, browser support, and read-only DigitalOcean authentication. `up` can create billable DigitalOcean resources and succeeds only after private SSH/Tailscale access and Hermes health are ready.
 
-See [Agent bundles and inspection](docs/agent-bundles.md) for initialization, schema, defaults, security boundaries, and command options.
+See [Agent bundles and inspection](docs/agent-bundles.md) and [Bring up an agent](docs/agent-up.md).

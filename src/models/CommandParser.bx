@@ -11,7 +11,7 @@ class {
 		}
 
 		var action = positionals[2];
-		if (action != "inspect" && action != "init" && action != "doctor") {
+		if (action != "inspect" && action != "init" && action != "doctor" && action != "up" && action != "open") {
 			return invalid("unknown agent command '" & action & "'");
 		}
 		if (arrayLen(positionals) > 2) {
@@ -22,7 +22,11 @@ class {
 			"file,region,size,hostname,runtime-image,state-archive,workspace-archive,verbose" :
 			action == "init" ?
 				"file,name,region,size,hostname,runtime-image,dashboard-username,age-recipient,verbose" :
-				"file,verbose";
+				action == "up" ?
+					"file,region,size,hostname,runtime-image,verbose" :
+					action == "open" ?
+						"file,hostname,verbose" :
+						"file,verbose";
 		for (var optionName in structKeyArray(options)) {
 			if (listFindNoCase(allowed, optionName) == 0) {
 				return invalid(
@@ -65,14 +69,18 @@ class {
 			return result;
 		}
 
-		if (action == "inspect") {
+		if (action == "inspect" || action == "up" || action == "open") {
 			result.overrides = {};
-			copyOption(options, "region", result.overrides, "region");
-			copyOption(options, "size", result.overrides, "size");
+			if (action != "open") {
+				copyOption(options, "region", result.overrides, "region");
+				copyOption(options, "size", result.overrides, "size");
+				copyOption(options, "runtime-image", result.overrides, "runtimeImage");
+			}
 			copyOption(options, "hostname", result.overrides, "hostname");
-			copyOption(options, "runtime-image", result.overrides, "runtimeImage");
-			copyOption(options, "state-archive", result.overrides, "stateArchive");
-			copyOption(options, "workspace-archive", result.overrides, "workspaceArchive");
+			if (action == "inspect") {
+				copyOption(options, "state-archive", result.overrides, "stateArchive");
+				copyOption(options, "workspace-archive", result.overrides, "workspaceArchive");
+			}
 			return result;
 		}
 

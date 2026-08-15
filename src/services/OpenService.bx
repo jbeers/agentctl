@@ -1,0 +1,45 @@
+class {
+
+	function init(required any commandRunner) {
+		variables.runner = arguments.commandRunner;
+		return this;
+	}
+
+	function launch(required struct plan, boolean verbose = false) {
+		var launcher = "";
+		if (variables.runner.isAvailable("xdg-open")) {
+			launcher = "xdg-open";
+		} else if (variables.runner.isAvailable("open")) {
+			launcher = "open";
+		} else {
+			fail("no supported browser launcher found; install xdg-open or open");
+		}
+
+		var url = "http://" & arguments.plan.values.hostname.value & ":9119";
+		var result = {};
+		try {
+			result = variables.runner.run(launcher, [ url ]);
+		} catch (error) {
+			fail("opening the Hermes dashboard failed");
+		}
+		if (
+			!structKeyExists(result, "exitCode") ||
+			isNull(result.exitCode) ||
+			result.exitCode != 0 ||
+			(structKeyExists(result, "timeout") && result.timeout)
+		) {
+			fail("opening the Hermes dashboard failed");
+		}
+		return { url : url, launcher : launcher, verbose : arguments.verbose };
+	}
+
+	function format(required struct result) {
+		return "Opened Hermes dashboard at " & arguments.result.url &
+			(arguments.result.verbose ? " using " & arguments.result.launcher : "") & ".";
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}

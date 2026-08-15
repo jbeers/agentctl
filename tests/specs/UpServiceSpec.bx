@@ -1,0 +1,334 @@
+import tests.support.FakeCommandRunner;
+
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("UpService", () => {
+			it("creates private provider resources and reconciles a healthy runtime without exposing secrets", () => {
+				var state = providerState();
+				var runner = scriptedRunner(state);
+				var service = new src.services.UpService(runner, 3, 0);
+				var resolved = resolvedBundle("test-agent");
+				var result = service.up(resolved, true);
+				var output = service.format(result);
+
+				expect(result.dropletCreated).toBeTrue();
+				expect(result.volumeCreated).toBeTrue();
+				expect(output).toInclude("Agent 'test-agent' is ready.");
+				expect(output).toInclude("Hermes gateway: healthy at http://test-agent:8642/health");
+				expect(output).notToInclude("secret");
+				expect(() => yamlDeserialize(state.cloudInit)).notToThrow();
+				expect(state.cloudInit).toInclude("tskey-auth-test-up");
+				expect(state.cloudInit).toInclude("ssh-ed25519 AAAATESTPUBLIC");
+				expect(state.cloudInit).toInclude("[ chage, -d, '-1', -E, '-1', -M, '-1', root ]");
+				expect(state.cloudInit).notToInclude("registry-secret");
+				expect(state.cloudInit).notToInclude("api-secret");
+				expect(state.cloudInit).notToInclude("test-private-material");
+				expect(state.payload).toInclude("registry-secret");
+				expect(state.payload).toInclude("API_SERVER_KEY=api-secret");
+				expect(state.payload).notToInclude("tskey-auth-test-up");
+				expect(state.payload).notToInclude("test-private-material");
+				expect(state.runtimeScript).notToInclude("telegram");
+				expect(state.runtimeScript).toInclude("/usr/local/sbin/agentctl-runtime-v2");
+				expect(state.runtimeScript).toInclude("curl --fail --silent");
+				expect(state.identityMode).toBe("600");
+				expect(state.cloudInitMode).toBe("600");
+				expect(state.payloadMode).toBe("600");
+				expect(state.scriptMode).toBe("600");
+				expect(fileExists(state.identityPath)).toBeFalse();
+				expect(fileExists(state.cloudInitPath)).toBeFalse();
+				expect(fileExists(state.payloadPath)).toBeFalse();
+				expect(fileExists(state.scriptPath)).toBeFalse();
+
+				var dropletCreate = findCall(runner.getCalls(), "doctl", "droplet,create");
+				expect(dropletCreate.arguments).toInclude("--user-data-file");
+				expect(dropletCreate.arguments).toInclude("ubuntu-24-04-x64");
+				expect(dropletCreate.arguments).notToInclude("--ssh-keys");
+				var firewallCreate = findCall(runner.getCalls(), "doctl", "firewall,create");
+				expect(firewallCreate.arguments).toInclude("--outbound-rules");
+				expect(firewallCreate.arguments).toInclude("agentctl-v2");
+				for (var call in runner.getCalls()) {
+					var argv = jsonSerialize(call.arguments);
+					for (var secret in secretValues(resolved)) expect(argv).notToInclude(secret);
+					expect(isNull(call.input) ? "" : toString(call.input)).notToInclude("secret");
+				}
+			});
+
+			it("reuses one exact Droplet and volume while reinstalling the runtime", () => {
+				var state = providerState({
+					droplets : "101 test-agent",
+					volumes : "vol-existing agent-home-test-agent nyc3 10",
+					attached : "101",
+					tags : "agentctl-v2",
+					firewalls : "fw-existing agentctl-private"
+				});
+				var runner = scriptedRunner(state);
+				var result = new src.services.UpService(runner, 1, 0).up(resolvedBundle("test-agent"));
+
+				expect(result.dropletCreated).toBeFalse();
+				expect(result.volumeCreated).toBeFalse();
+				expect(state.runtimeExecutions).toBe(1);
+				expect(state.cloudInit).toBe("");
+				expect(findCall(runner.getCalls(), "doctl", "firewall,update").arguments).toInclude("--inbound-rules");
+				expect(findCall(runner.getCalls(), "doctl", "tag,apply").arguments).toInclude("do:droplet:101");
+				expect(countCalls(runner.getCalls(), "doctl", "droplet,create")).toBe(0);
+				expect(countCalls(runner.getCalls(), "doctl", "volume,create")).toBe(0);
+				expect(countCalls(runner.getCalls(), "doctl", "volume-action,attach")).toBe(0);
+			});
+
+			it("refuses duplicate exact-name Droplets and volumes before mutation", () => {
+				var dropletState = providerState({ droplets : "101 test-agent" & char(10) & "102 test-agent" });
+				var dropletRunner = scriptedRunner(dropletState);
+				expect(() => new src.services.UpService(dropletRunner, 1, 0).up(resolvedBundle("test-agent"))).toThrow(
+					message="multiple Droplets named 'test-agent' exist; refusing to choose one"
+				);
+				expect(mutatingProviderCalls(dropletRunner.getCalls())).toBe(0);
+
+				var volumeState = providerState({
+					volumes : "vol-1 agent-home-test-agent nyc3 10" & char(10) & "vol-2 agent-home-test-agent nyc3 10"
+				});
+				var volumeRunner = scriptedRunner(volumeState);
+				expect(() => new src.services.UpService(volumeRunner, 1, 0).up(resolvedBundle("test-agent"))).toThrow(
+					message="multiple volumes named 'agent-home-test-agent' exist; refusing to choose one"
+				);
+				expect(mutatingProviderCalls(volumeRunner.getCalls())).toBe(0);
+
+				var attachmentState = providerState({
+					droplets : "101 test-agent",
+					volumes : "vol-1 agent-home-test-agent nyc3 10",
+					attached : "999"
+				});
+				var attachmentRunner = scriptedRunner(attachmentState);
+				expect(() => new src.services.UpService(attachmentRunner, 1, 0).up(resolvedBundle("test-agent"))).toThrow(
+					message="volume 'agent-home-test-agent' is attached to another Droplet"
+				);
+				expect(mutatingProviderCalls(attachmentRunner.getCalls())).toBe(0);
+			});
+
+			it("retries private SSH readiness and replaces only the exact stale host key", () => {
+				var state = providerState({
+					droplets : "101 test-agent",
+					volumes : "vol-existing agent-home-test-agent nyc3 10",
+					attached : "101",
+					tags : "agentctl-v2",
+					firewalls : "fw-existing agentctl-private",
+					readinessFailures : 2,
+					staleFirst : true
+				});
+				var runner = scriptedRunner(state);
+				var result = new src.services.UpService(runner, 3, 0).up(resolvedBundle("test-agent"));
+
+				expect(result.sshAttempts).toBe(3);
+				expect(state.readinessCalls).toBe(3);
+				var removal = findCall(runner.getCalls(), "ssh-keygen", "-R,test-agent");
+				expect(removal.arguments).toBe([ "-R", "test-agent" ]);
+			});
+
+			it("reports DigitalOcean's forced root-password change without exhausting retries", () => {
+				var state = providerState({
+					droplets : "101 test-agent",
+					volumes : "vol-existing agent-home-test-agent nyc3 10",
+					attached : "101",
+					tags : "agentctl-v2",
+					firewalls : "fw-existing agentctl-private",
+					readinessFailures : 3,
+					passwordExpired : true
+				});
+				var runner = scriptedRunner(state);
+				expect(() => new src.services.UpService(runner, 3, 0).up(resolvedBundle("test-agent"))).toThrow(
+					message="agent host has an expired root password; recreate the Droplet with current host enrollment"
+				);
+				expect(state.readinessCalls).toBe(1);
+			});
+
+			it("cleans every local and remote temporary file after runtime failure", () => {
+				var state = providerState({ failRuntime : true });
+				var runner = scriptedRunner(state);
+				expect(() => new src.services.UpService(runner, 1, 0).up(resolvedBundle("test-agent"))).toThrow(
+					message="reconciling the Hermes runtime and health endpoint failed"
+				);
+
+				for (var path in [ state.identityPath, state.cloudInitPath, state.payloadPath, state.scriptPath ]) {
+					expect(path).notToBe("");
+					expect(fileExists(path)).toBeFalse();
+				}
+				expect(state.remoteRemovals).toBe(2);
+			});
+
+			it("generates syntax-valid runtime Bash with seed-once and reconciled settings", () => {
+				var script = new src.services.UpService(new FakeCommandRunner()).runtimeScript();
+				var syntax = systemExecute("bash", [ "-n", "-c", script ]);
+
+				expect(syntax.exitCode).toBe(0, syntax.error);
+				expect(script).toInclude("if [[ ! -s $env_file ]]");
+				expect(script).toInclude("/etc/agentctl/hermes-launcher.env");
+				expect(script).toInclude("--password-stdin");
+				expect(script).notToInclude("telegram");
+			});
+		});
+	}
+
+	private function resolvedBundle(required string name) {
+		var plan = new src.services.BundleService().parse({
+			version : 2,
+			identity : { name : arguments.name },
+			runtime : { image : "ghcr.io/example/hermes:sha-test-up" },
+			hermes : { initial : { dashboardUsername : "operator" } }
+		});
+		return {
+			plan : plan,
+			secretValues : {
+				sshPrivateKey : "-----BEGIN OPENSSH PRIVATE KEY-----" & char(10) & "test-private-material" & char(10) & "-----END OPENSSH PRIVATE KEY-----" & char(10),
+				tailscaleAuthKey : "tskey-auth-test-up",
+				registryToken : "registry-secret",
+				apiServerKey : "api-secret",
+				dashboardPassword : "dashboard-secret",
+				dashboardSecret : "signing-secret"
+			}
+		};
+	}
+
+	private function secretValues(required struct resolved) {
+		return [
+			arguments.resolved.secretValues.sshPrivateKey,
+			arguments.resolved.secretValues.tailscaleAuthKey,
+			arguments.resolved.secretValues.registryToken,
+			arguments.resolved.secretValues.apiServerKey,
+			arguments.resolved.secretValues.dashboardPassword,
+			arguments.resolved.secretValues.dashboardSecret
+		];
+	}
+
+	private function providerState(struct overrides = {}) {
+		var state = {
+			droplets : "",
+			volumes : "",
+			attached : "",
+			tags : "",
+			firewalls : "",
+			readinessFailures : 0,
+			staleFirst : false,
+			passwordExpired : false,
+			failRuntime : false,
+			readinessCalls : 0,
+			runtimeExecutions : 0,
+			remoteRemovals : 0,
+			identityPath : "",
+			identityMode : "",
+			cloudInitPath : "",
+			cloudInitMode : "",
+			cloudInit : "",
+			payloadPath : "",
+			payloadMode : "",
+			payload : "",
+			scriptPath : "",
+			scriptMode : "",
+			runtimeScript : ""
+		};
+		for (var key in structKeyArray(arguments.overrides)) state[key] = arguments.overrides[key];
+		return state;
+	}
+
+	private function scriptedRunner(required struct state) {
+		var handler = (executable, commandArguments, input) => {
+			if (arguments.executable == "ssh-keygen") {
+				if (arguments.commandArguments[1] == "-y") {
+					state.identityPath = arguments.commandArguments[5];
+					state.identityMode = fileMode(state.identityPath);
+					return success("ssh-ed25519 AAAATESTPUBLIC agentctl:test-agent");
+				}
+				return success();
+			}
+			if (arguments.executable == "doctl") {
+				var command = arrayToList(arguments.commandArguments, ",");
+				if (find("droplet,list", command) > 0) return success(state.droplets);
+				if (find("volume,list", command) > 0) return success(state.volumes);
+				if (find("volume,get", command) > 0) return success(state.attached);
+				if (find("tag,list", command) > 0) return success(state.tags);
+				if (find("firewall,list", command) > 0) return success(state.firewalls);
+				if (find("volume,create", command) > 0) return success("vol-created");
+				if (find("droplet,create", command) > 0) {
+					var pathIndex = arrayFind(arguments.commandArguments, "--user-data-file");
+					state.cloudInitPath = arguments.commandArguments[pathIndex + 1];
+					state.cloudInitMode = fileMode(state.cloudInitPath);
+					state.cloudInit = fileRead(state.cloudInitPath);
+					return success("202");
+				}
+				return success();
+			}
+			if (arguments.executable == "scp") {
+				var localPath = arguments.commandArguments[arrayLen(arguments.commandArguments) - 1];
+				if (right(localPath, 8) == ".payload") {
+					state.payloadPath = localPath;
+					state.payloadMode = fileMode(localPath);
+					state.payload = fileRead(localPath);
+				} else {
+					state.scriptPath = localPath;
+					state.scriptMode = fileMode(localPath);
+					state.runtimeScript = fileRead(localPath);
+				}
+				return success();
+			}
+			if (arguments.executable == "ssh") {
+				var command = arrayToList(arguments.commandArguments, ",");
+				if (find("tailscale,status", command) > 0) {
+					state.readinessCalls++;
+					if (state.readinessCalls <= state.readinessFailures) {
+						return failure(
+							state.passwordExpired ?
+								"You are required to change your password immediately. Password change required but no TTY available." :
+								(state.staleFirst && state.readinessCalls == 1 ? "REMOTE HOST IDENTIFICATION HAS CHANGED" : "not ready")
+						);
+					}
+					return success();
+				}
+				if (find("/bin/bash,/tmp/agentctl-", command) > 0) {
+					state.runtimeExecutions++;
+					return state.failRuntime ? failure("must-not-leak") : success("healthy");
+				}
+				if (find("/bin/rm,-f,--,/tmp/agentctl-", command) > 0) state.remoteRemovals++;
+				return success();
+			}
+			return success();
+		};
+		return new FakeCommandRunner([], true, handler);
+	}
+
+	private function success(string output = "") {
+		return { exitCode : 0, output : arguments.output, error : "", timeout : false };
+	}
+
+	private function failure(string error = "failed") {
+		return { exitCode : 1, output : "", error : arguments.error, timeout : false };
+	}
+
+	private function findCall(required array calls, required string executable, required string commandParts) {
+		for (var call in arguments.calls) {
+			if (call.executable == arguments.executable && find(arguments.commandParts, arrayToList(call.arguments, ",")) > 0) return call;
+		}
+		throw "expected command was not called: " & arguments.executable & " " & arguments.commandParts;
+	}
+
+	private function countCalls(required array calls, required string executable, required string commandParts) {
+		var count = 0;
+		for (var call in arguments.calls) {
+			if (call.executable == arguments.executable && find(arguments.commandParts, arrayToList(call.arguments, ",")) > 0) count++;
+		}
+		return count;
+	}
+
+	private function mutatingProviderCalls(required array calls) {
+		var count = 0;
+		for (var call in arguments.calls) {
+			if (call.executable != "doctl") continue;
+			var command = arrayToList(call.arguments, ",");
+			if (find(",create,", "," & command & ",") > 0 || find(",update,", "," & command & ",") > 0 || find("volume-action,attach", command) > 0) count++;
+		}
+		return count;
+	}
+
+	private function fileMode(required string path) {
+		return trim(systemExecute("stat", [ "-c", "%a", arguments.path ]).output);
+	}
+
+}

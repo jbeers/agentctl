@@ -1,0 +1,657 @@
+class {
+
+	function init(
+		required any commandRunner,
+		numeric readinessAttempts = 60,
+		numeric readinessDelayMilliseconds = 5000
+	) {
+		variables.runner = arguments.commandRunner;
+		variables.readinessAttempts = arguments.readinessAttempts;
+		variables.readinessDelayMilliseconds = arguments.readinessDelayMilliseconds;
+		if (variables.readinessAttempts < 1 || variables.readinessDelayMilliseconds < 0) {
+			fail("invalid SSH readiness retry settings");
+		}
+		return this;
+	}
+
+	function up(required struct resolved, boolean verbose = false) {
+		validateResolved(arguments.resolved);
+		announce("agent up: validating local tools and generated SSH identity");
+		for (var tool in [ "doctl", "ssh", "scp", "ssh-keygen" ]) {
+			if (!variables.runner.isAvailable(tool)) fail(tool & " is required to bring up an agent");
+		}
+
+		var plan = arguments.resolved.plan;
+		var secrets = arguments.resolved.secretValues;
+		var name = plan.values.name.value;
+		var hostname = plan.values.hostname.value;
+		var volumeName = plan.derived.volumeName;
+		var identityPath = secureTempFile("agentctl-up-ssh-", ".key", secrets.sshPrivateKey);
+		var cloudInitPath = "";
+		try {
+			var publicKey = derivePublicKey(identityPath);
+			announce("agent up: checking exact-name DigitalOcean resources for '" & name & "'");
+			var droplet = findDroplet(name);
+			var volume = findVolume(volumeName, plan.values.region.value, plan.values.stateSize.value);
+			var attachedIds = volume.exists ? volumeAttachmentIds(volume.id) : [];
+			validateAttachment(volumeName, attachedIds, droplet);
+
+			announce("agent up: reconciling the deny-inbound firewall and managed tag");
+			ensureFirewall();
+			if (droplet.exists) ensureDropletTag(droplet.id);
+			var volumeCreated = false;
+			if (!volume.exists) {
+				volume = createVolume(name, volumeName, plan.values.region.value, plan.values.stateSize.value);
+				volumeCreated = true;
+			}
+
+			announce("agent up: " & (volumeCreated ? "created" : "reusing") & " provider volume '" & volumeName & "'");
+			var dropletCreated = false;
+			if (!droplet.exists) {
+				cloudInitPath = secureTempFile(
+					"agentctl-cloud-init-",
+					".yaml",
+					enrollmentCloudInit(publicKey, secrets.tailscaleAuthKey, hostname)
+				);
+				droplet = createDroplet(plan, volume.id, cloudInitPath);
+				dropletCreated = true;
+				deleteSensitiveFile(cloudInitPath);
+				cloudInitPath = "";
+			} else if (arrayLen(attachedIds) == 0) {
+				attachVolume(volume.id, droplet.id);
+			}
+
+			announce("agent up: " & (dropletCreated ? "created" : "reusing") & " Droplet '" & name & "'");
+			var sshOptions = buildSshArguments(identityPath);
+			announce("agent up: waiting for OpenSSH over Tailscale at '" & hostname & "'");
+			var sshAttempts = waitForSsh(hostname, sshOptions);
+			announce("agent up: reconciling persistent state and the Hermes runtime");
+			reconcileRuntime(plan, secrets, sshOptions);
+			return {
+				name : name,
+				hostname : hostname,
+				dropletId : droplet.id,
+				dropletCreated : dropletCreated,
+				volumeName : volumeName,
+				volumeId : volume.id,
+				volumeCreated : volumeCreated,
+				sshAttempts : sshAttempts,
+				verbose : arguments.verbose
+			};
+		} finally {
+			deleteSensitiveFiles([ cloudInitPath, identityPath ]);
+		}
+	}
+
+	function format(required struct result) {
+		var lines = [
+			"Agent '" & arguments.result.name & "' is ready.",
+			"  Droplet " & arguments.result.dropletId & ": " & (arguments.result.dropletCreated ? "created" : "reused"),
+			"  Volume " & arguments.result.volumeName & " (" & arguments.result.volumeId & "): " & (arguments.result.volumeCreated ? "created" : "reused"),
+			"  Host enrollment: " & (arguments.result.dropletCreated ? "completed" : "reused"),
+			"  Runtime reconciliation: completed",
+			"  Hermes gateway: healthy at http://" & arguments.result.hostname & ":8642/health"
+		];
+		if (arguments.result.verbose) {
+			arrayAppend(lines, "  SSH/Tailscale readiness attempts: " & arguments.result.sshAttempts);
+		}
+		return linesToText(lines, false);
+	}
+
+	function buildSshArguments(required string identityPath) {
+		return [
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=10",
+			"-o", "StrictHostKeyChecking=accept-new",
+			"-i", arguments.identityPath
+		];
+	}
+
+	function enrollmentCloudInit(
+		required string publicKey,
+		required string tailscaleAuthKey,
+		required string hostname
+	) {
+		return linesToText([
+			"##cloud-config",
+			"package_update: true",
+			"packages:",
+			"  - ca-certificates",
+			"  - curl",
+			"  - dbus-user-session",
+			"  - fuse-overlayfs",
+			"  - podman",
+			"  - slirp4netns",
+			"  - uidmap",
+			"users:",
+			"  - name: root",
+			"    lock_passwd: true",
+			"    ssh_authorized_keys:",
+			"      - " & jsonSerialize(arguments.publicKey),
+			"  - name: agent",
+			"    lock_passwd: true",
+			"    create_home: true",
+			"    shell: /bin/bash",
+			"disable_root: false",
+			"ssh_pwauth: false",
+			"runcmd:",
+			"  - [ chage, -d, '-1', -E, '-1', -M, '-1', root ]",
+			"  - [ bash, -c, " & jsonSerialize("curl -fsSL https://tailscale.com/install.sh | sh") & " ]",
+			"  - [ tailscale, up, --auth-key, " & jsonSerialize(arguments.tailscaleAuthKey) & ", --hostname, " & jsonSerialize(arguments.hostname) & " ]",
+			"  - [ loginctl, enable-linger, agent ]",
+			"  - [ install, -d, -m, '0750', -o, agent, -g, agent, /workdir ]"
+		]);
+	}
+
+	function runtimeScript() {
+		return linesToText([
+			'##!/usr/bin/env bash',
+			'set -euo pipefail',
+			'script_path=$0',
+			'installed_path=/usr/local/sbin/agentctl-runtime-v2',
+			'agent_name=$1',
+			'volume_name=$2',
+			'hermes_image=$3',
+			'registry=$4',
+			'registry_username=$5',
+			'payload=$6',
+			'cleanup() {',
+			'  rm -f -- "$payload"',
+			'  [[ $script_path == "$installed_path" ]] || rm -f -- "$script_path"',
+			'}',
+			'trap cleanup EXIT',
+			'[[ $agent_name =~ ^[a-z0-9][a-z0-9-]*$ ]]',
+			'[[ $volume_name =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]',
+			'[[ $hermes_image =~ ^[A-Za-z0-9._/@:-]+$ ]]',
+			'[[ $registry == - || $registry =~ ^[A-Za-z0-9.-]+$ ]]',
+			'[[ $registry_username == - || $registry_username =~ ^[A-Za-z0-9-]+$ ]]',
+			'[[ $payload =~ ^/tmp/agentctl-[a-z0-9]+[.]payload$ ]]',
+			'if [[ $script_path != "$installed_path" ]]; then',
+			'  install -m 0755 "$script_path" "$installed_path"',
+			'fi',
+			'chmod 0600 "$payload"',
+			'device="/dev/disk/by-id/scsi-0DO_Volume_${volume_name}"',
+			'mount_dir="/agent-dirs/${agent_name}"',
+			'for ((attempt = 1; attempt <= 30; attempt++)); do',
+			'  [[ -e $device ]] && break',
+			'  (( attempt < 30 )) || { printf ''agentctl runtime: volume device did not appear\n'' >&2; exit 1; }',
+			'  sleep 2',
+			'done',
+			'install -d -m 0750 "$mount_dir"',
+			'if ! mountpoint -q "$mount_dir"; then',
+			'  mount -o defaults,nofail,discard,noatime "$device" "$mount_dir"',
+			'fi',
+			'if ! grep -Fqs "$device $mount_dir " /etc/fstab; then',
+			'  printf ''%s %s ext4 defaults,nofail,discard,noatime 0 2\n'' "$device" "$mount_dir" >> /etc/fstab',
+			'fi',
+			'printf ''%s\n'' "$agent_name" > /etc/coding-agent-name',
+			'if ! id agent >/dev/null 2>&1; then',
+			'  useradd --create-home --user-group --shell /bin/bash agent',
+			'fi',
+			'agent_uid=$(id -u agent)',
+			'agent_gid=$(id -g agent)',
+			'agent_home=$(getent passwd agent | cut -d: -f6)',
+			'agent_runtime_dir="/run/user/$agent_uid"',
+			'agent_bus="unix:path=$agent_runtime_dir/bus"',
+			'agent_socket="$agent_runtime_dir/podman/podman.sock"',
+			'loginctl enable-linger agent',
+			'systemctl start "user@$agent_uid.service"',
+			'install -d -m 0755 -o "$agent_uid" -g "$agent_gid" "$agent_home/.config/systemd/user/podman.socket.d"',
+			'cat > "$agent_home/.config/systemd/user/podman.socket.d/override.conf" <<''EOF''',
+			'[Socket]',
+			'SocketMode=0666',
+			'EOF',
+			'chown -R "$agent_uid:$agent_gid" "$agent_home/.config"',
+			'runuser -u agent -- env HOME="$agent_home" XDG_RUNTIME_DIR="$agent_runtime_dir" DBUS_SESSION_BUS_ADDRESS="$agent_bus" systemctl --user daemon-reload',
+			'runuser -u agent -- env HOME="$agent_home" XDG_RUNTIME_DIR="$agent_runtime_dir" DBUS_SESSION_BUS_ADDRESS="$agent_bus" systemctl --user enable --now podman.socket',
+			'runuser -u agent -- env HOME="$agent_home" XDG_RUNTIME_DIR="$agent_runtime_dir" DBUS_SESSION_BUS_ADDRESS="$agent_bus" systemctl --user restart podman.socket',
+			'runuser -u agent -- env HOME="$agent_home" XDG_RUNTIME_DIR="$agent_runtime_dir" DBUS_SESSION_BUS_ADDRESS="$agent_bus" systemctl --user enable podman-restart.service >/dev/null 2>&1 || true',
+			'[[ -S $agent_socket && $(stat -c ''%a'' "$agent_socket") == 666 ]] || { printf ''agentctl runtime: rootless Podman socket was not created with the required mode\n'' >&2; exit 1; }',
+			'podman_as_agent() {',
+			'  (',
+			'    cd "$agent_home"',
+			'    runuser -u agent -- env HOME="$agent_home" XDG_RUNTIME_DIR="$agent_runtime_dir" DBUS_SESSION_BUS_ADDRESS="$agent_bus" podman "$@"',
+			'  )',
+			'}',
+			'install -d -m 0750 -o "$agent_uid" -g "$agent_gid" "$mount_dir" /workdir',
+			'env_file="$mount_dir/.env"',
+			'IFS= read -r registry_token < "$payload" || true',
+			'if [[ ! -s $env_file ]]; then',
+			'  env_tmp=$(mktemp "$mount_dir/.env.XXXXXX")',
+			'  tail -n +2 "$payload" > "$env_tmp"',
+			'  chmod 0600 "$env_tmp"',
+			'  mv "$env_tmp" "$env_file"',
+			'fi',
+			'chmod 0600 "$env_file"',
+			'for required_key in API_SERVER_KEY HERMES_DASHBOARD_BASIC_AUTH_USERNAME HERMES_DASHBOARD_BASIC_AUTH_PASSWORD HERMES_DASHBOARD_BASIC_AUTH_SECRET; do',
+			'  grep -q "^${required_key}=." "$env_file" || { printf ''agentctl runtime: required Hermes setting is missing\n'' >&2; exit 1; }',
+			'done',
+			'install -d -m 0755 /etc/agentctl',
+			'launcher_tmp=$(mktemp /etc/agentctl/hermes-launcher.XXXXXX)',
+			'cat > "$launcher_tmp" <<''EOF''',
+			'API_SERVER_ENABLED=true',
+			'API_SERVER_HOST=0.0.0.0',
+			'HERMES_DASHBOARD=1',
+			'CONTAINER_HOST=unix:///run/podman/podman.sock',
+			'DOCKER_HOST=unix:///run/podman/podman.sock',
+			'EOF',
+			'chmod 0644 "$launcher_tmp"',
+			'mv "$launcher_tmp" /etc/agentctl/hermes-launcher.env',
+			'chown -R "$agent_uid:$agent_gid" "$mount_dir" /workdir',
+			'podman_as_agent unshare chown -R 10000:10000 "$mount_dir" /workdir',
+			'tailscale_ip=$(tailscale ip -4)',
+			'tailscale_ip=${tailscale_ip%%$''\n''*}',
+			'[[ -n $tailscale_ip ]] || { printf ''agentctl runtime: no Tailscale IPv4 address is available\n'' >&2; exit 1; }',
+			'if [[ -n $registry_token ]]; then',
+			'  [[ $registry != - && $registry_username != - ]] || { printf ''agentctl runtime: registry settings are invalid\n'' >&2; exit 1; }',
+			'  printf ''%s'' "$registry_token" | podman_as_agent login --username "$registry_username" --password-stdin "$registry"',
+			'fi',
+			'unset registry_token',
+			'podman_as_agent pull "$hermes_image"',
+			'if podman_as_agent container inspect hermes >/dev/null 2>&1; then',
+			'  podman_as_agent rm --force hermes',
+			'fi',
+			'podman_as_agent run --detach --name hermes --restart unless-stopped --security-opt label=disable --shm-size 1g --log-opt max-size=10m --log-opt max-file=3 --env-file /etc/agentctl/hermes-launcher.env --publish "$tailscale_ip:8642:8642" --publish "$tailscale_ip:9119:9119" --volume "$agent_socket:/run/podman/podman.sock" --volume "$mount_dir:/opt/data" --volume /workdir:/workdir "$hermes_image" gateway run',
+			'gateway_ready=false',
+			'for ((attempt = 1; attempt <= 60; attempt++)); do',
+			'  podman_as_agent exec hermes hermes gateway start >/dev/null 2>&1 || true',
+			'  if curl --fail --silent "http://$tailscale_ip:8642/health" >/dev/null; then',
+			'    gateway_ready=true',
+			'    break',
+			'  fi',
+			'  sleep 2',
+			'done',
+			'[[ $gateway_ready == true ]] || { printf ''agentctl runtime: Hermes gateway did not become ready\n'' >&2; exit 1; }',
+			'printf ''Hermes gateway is healthy\n'''
+		]);
+	}
+
+	private function validateResolved(required struct resolved) {
+		if (!structKeyExists(arguments.resolved, "plan") || !structKeyExists(arguments.resolved, "secretValues")) {
+			fail("resolved agent bundle is invalid");
+		}
+		var plan = arguments.resolved.plan;
+		var secrets = arguments.resolved.secretValues;
+		if (plan.values.computeProvider.value != "digitalocean") fail("agent up requires the digitalocean compute provider");
+		if (plan.values.stateStrategy.value != "provider-volume") fail("agent up requires provider-volume working state");
+		if (plan.values.accessMethod.value != "openssh-over-tailscale") fail("agent up requires OpenSSH over Tailscale");
+		var missing = [];
+		for (var key in [ "sshPrivateKey", "tailscaleAuthKey", "apiServerKey", "dashboardPassword", "dashboardSecret" ]) {
+			if (!structKeyExists(secrets, key) || secrets[key] == "") arrayAppend(missing, key);
+		}
+		if (arrayLen(missing) > 0) fail("agent bundle is missing required credentials: " & joinValues(missing, ", "));
+		if (arrayLen(reMatch("^tskey-auth-[A-Za-z0-9_-]+$", secrets.tailscaleAuthKey)) == 0) {
+			fail("Tailscale enrollment key has an unsupported format");
+		}
+		for (var key in structKeyArray(secrets)) {
+			if (find(char(10), secrets[key]) > 0 || find(char(13), secrets[key]) > 0) {
+				if (key != "sshPrivateKey") fail("agent bundle secret values must not contain newlines");
+			}
+		}
+	}
+
+	private function derivePublicKey(required string identityPath) {
+		var result = variables.runner.run(
+			"ssh-keygen",
+			[ "-y", "-P", "", "-f", arguments.identityPath ],
+			10,
+			true
+		);
+		requireSuccess(result, "deriving the agent SSH public key");
+		var publicKey = trim(result.output);
+		if (arrayLen(reMatch("^ssh-ed25519[[:space:]]+[A-Za-z0-9+/=]+", publicKey)) == 0) {
+			fail("generated agent SSH identity is invalid");
+		}
+		return publicKey;
+	}
+
+	private function findDroplet(required string name) {
+		var result = runDoctl(
+			[ "compute", "droplet", "list", "--format", "ID,Name", "--no-header" ],
+			"listing DigitalOcean Droplets"
+		);
+		var matches = [];
+		for (var row in parseRows(result.output, 2)) {
+			if (row[2] == arguments.name) arrayAppend(matches, row[1]);
+		}
+		if (arrayLen(matches) > 1) fail("multiple Droplets named '" & arguments.name & "' exist; refusing to choose one");
+		return arrayLen(matches) == 1 ? { exists : true, id : matches[1] } : { exists : false, id : "" };
+	}
+
+	private function findVolume(required string name, required string region, required string size) {
+		var result = runDoctl(
+			[ "compute", "volume", "list", "--format", "ID,Name,Region,Size", "--no-header" ],
+			"listing DigitalOcean volumes"
+		);
+		var matches = [];
+		for (var row in parseRows(result.output, 4)) {
+			if (row[2] == arguments.name) arrayAppend(matches, row);
+		}
+		if (arrayLen(matches) > 1) fail("multiple volumes named '" & arguments.name & "' exist; refusing to choose one");
+		if (arrayLen(matches) == 0) return { exists : false, id : "" };
+		var match = matches[1];
+		if (match[3] != arguments.region) {
+			fail("volume '" & arguments.name & "' is in " & match[3] & ", but the agent region is " & arguments.region);
+		}
+		var expectedSize = replace(arguments.size, "GiB", "", "all");
+		if (match[4] != expectedSize) {
+			fail("volume '" & arguments.name & "' is " & match[4] & "GiB, but the bundle requires " & arguments.size);
+		}
+		return { exists : true, id : match[1] };
+	}
+
+	private function volumeAttachmentIds(required string volumeId) {
+		var result = runDoctl(
+			[ "compute", "volume", "get", arguments.volumeId, "--format", "DropletIDs", "--no-header" ],
+			"checking DigitalOcean volume attachment"
+		);
+		var output = trim(result.output);
+		var ids = reMatch("[0-9]+", output);
+		if (output != "" && arrayLen(ids) == 0) fail("could not parse the DigitalOcean volume attachment state");
+		return ids;
+	}
+
+	private function validateAttachment(required string volumeName, required array attachedIds, required struct droplet) {
+		if (!arguments.droplet.exists && arrayLen(arguments.attachedIds) > 0) {
+			fail("volume '" & arguments.volumeName & "' is attached to another Droplet");
+		}
+		if (arguments.droplet.exists && arrayLen(arguments.attachedIds) > 0) {
+			if (arrayLen(arguments.attachedIds) != 1 || arguments.attachedIds[1] != arguments.droplet.id) {
+				fail("volume '" & arguments.volumeName & "' is attached to another Droplet");
+			}
+		}
+	}
+
+	private function ensureFirewall() {
+		var tagName = "agentctl-v2";
+		var firewallName = "agentctl-private";
+		var tags = runDoctl(
+			[ "compute", "tag", "list", "--format", "Name", "--no-header" ],
+			"listing DigitalOcean tags"
+		);
+		var tagFound = false;
+		for (var row in parseRows(tags.output, 1)) {
+			if (row[1] == tagName) tagFound = true;
+		}
+		if (!tagFound) runDoctl([ "compute", "tag", "create", tagName ], "creating the managed DigitalOcean tag");
+
+		var firewalls = runDoctl(
+			[ "compute", "firewall", "list", "--format", "ID,Name", "--no-header" ],
+			"listing DigitalOcean firewalls"
+		);
+		var matches = [];
+		for (var row in parseRows(firewalls.output, 2)) {
+			if (row[2] == firewallName) arrayAppend(matches, row[1]);
+		}
+		if (arrayLen(matches) > 1) fail("multiple firewalls named '" & firewallName & "' exist; refusing to choose one");
+		var outbound = "protocol:tcp,ports:all,address:0.0.0.0/0 protocol:udp,ports:all,address:0.0.0.0/0 protocol:icmp,address:0.0.0.0/0";
+		if (arrayLen(matches) == 1) {
+			runDoctl([
+				"compute", "firewall", "update", matches[1],
+				"--name", firewallName,
+				"--outbound-rules", outbound,
+				"--inbound-rules", "",
+				"--tag-names", tagName
+			], "reconciling the deny-inbound DigitalOcean firewall");
+			return;
+		}
+		runDoctl([
+			"compute", "firewall", "create",
+			"--name", firewallName,
+			"--outbound-rules", outbound,
+			"--tag-names", tagName
+		], "creating the deny-inbound DigitalOcean firewall");
+	}
+
+	private function ensureDropletTag(required string dropletId) {
+		runDoctl(
+			[ "compute", "tag", "apply", "agentctl-v2", "--resource", "do:droplet:" & arguments.dropletId ],
+			"applying the managed tag to the DigitalOcean Droplet"
+		);
+	}
+
+	private function createVolume(
+		required string agentName,
+		required string volumeName,
+		required string region,
+		required string size
+	) {
+		var result = runDoctl([
+			"compute", "volume", "create", arguments.volumeName,
+			"--region", arguments.region,
+			"--size", arguments.size,
+			"--fs-type", "ext4",
+			"--desc", "Persistent Hermes state for " & arguments.agentName,
+			"--format", "ID", "--no-header"
+		], "creating the DigitalOcean volume");
+		var id = trim(result.output);
+		if (id == "") fail("creating the DigitalOcean volume returned no ID");
+		return { exists : true, id : id };
+	}
+
+	private function createDroplet(required struct plan, required string volumeId, required string cloudInitPath) {
+		var values = arguments.plan.values;
+		var result = runDoctl([
+			"compute", "droplet", "create", values.name.value,
+			"--image", "ubuntu-24-04-x64",
+			"--region", values.region.value,
+			"--size", values.computeSize.value,
+			"--tag-names", "agentctl-v2",
+			"--volumes", arguments.volumeId,
+			"--user-data-file", arguments.cloudInitPath,
+			"--enable-monitoring",
+			"--wait",
+			"--format", "ID", "--no-header"
+		], "creating the DigitalOcean Droplet");
+		var id = trim(result.output);
+		if (id == "") fail("creating the DigitalOcean Droplet returned no ID");
+		return { exists : true, id : id };
+	}
+
+	private function attachVolume(required string volumeId, required string dropletId) {
+		runDoctl(
+			[ "compute", "volume-action", "attach", arguments.volumeId, arguments.dropletId, "--wait" ],
+			"attaching the DigitalOcean volume"
+		);
+	}
+
+	private function waitForSsh(required string hostname, required array sshOptions) {
+		var target = "root@" & arguments.hostname;
+		for (var attempt = 1; attempt <= variables.readinessAttempts; attempt++) {
+			var result = executeSsh(arguments.sshOptions, target, [ "tailscale", "status" ]);
+			if (succeeded(result)) return attempt;
+			var errorText = structKeyExists(result, "error") && !isNull(result.error) ? uCase(result.error) : "";
+			if (find("REMOTE HOST IDENTIFICATION HAS CHANGED", errorText) > 0 || find("HOST KEY VERIFICATION FAILED", errorText) > 0) {
+				var removeResult = variables.runner.run("ssh-keygen", [ "-R", arguments.hostname ]);
+				requireSuccess(removeResult, "replacing the stale SSH host key for the exact agent hostname");
+			}
+			if (find("REQUIRED TO CHANGE YOUR PASSWORD", errorText) > 0 || find("PASSWORD CHANGE REQUIRED", errorText) > 0) {
+				fail("agent host has an expired root password; recreate the Droplet with current host enrollment");
+			}
+			if (attempt < variables.readinessAttempts && variables.readinessDelayMilliseconds > 0) {
+				sleep(variables.readinessDelayMilliseconds);
+			}
+		}
+		fail("agent host did not become reachable over SSH and Tailscale");
+	}
+
+	private function reconcileRuntime(required struct plan, required struct secrets, required array sshOptions) {
+		var registry = registrySettings(arguments.plan.values.runtimeImage.value, arguments.secrets.registryToken);
+		var payloadPath = "";
+		var scriptPath = "";
+		var remotePayload = remoteTempPath(".payload");
+		var remoteScript = remoteTempPath(".sh");
+		var payloadTransferAttempted = false;
+		var scriptTransferAttempted = false;
+		var target = "root@" & arguments.plan.values.hostname.value;
+		try {
+			payloadPath = secureTempFile(
+				"agentctl-hermes-payload-",
+				".payload",
+				runtimePayload(arguments.plan, arguments.secrets)
+			);
+			scriptPath = secureTempFile("agentctl-runtime-", ".sh", runtimeScript());
+			payloadTransferAttempted = true;
+			copyToRemote(payloadPath, remotePayload, target, arguments.sshOptions);
+			scriptTransferAttempted = true;
+			copyToRemote(scriptPath, remoteScript, target, arguments.sshOptions);
+			var result = executeSsh(arguments.sshOptions, target, [
+				"/bin/bash", remoteScript,
+				arguments.plan.values.name.value,
+				arguments.plan.derived.volumeName,
+				arguments.plan.values.runtimeImage.value,
+				registry.host,
+				registry.username,
+				remotePayload
+			]);
+			requireSuccess(result, "reconciling the Hermes runtime and health endpoint");
+		} finally {
+			var remoteCleanupFailed = scriptTransferAttempted && !removeRemote(remoteScript, target, arguments.sshOptions);
+			if (payloadTransferAttempted && !removeRemote(remotePayload, target, arguments.sshOptions)) remoteCleanupFailed = true;
+			deleteSensitiveFiles([ scriptPath, payloadPath ]);
+			if (remoteCleanupFailed) fail("removing temporary remote runtime files failed");
+		}
+	}
+
+	private function runtimePayload(required struct plan, required struct secrets) {
+		return arguments.secrets.registryToken & char(10) &
+			"API_SERVER_KEY=" & arguments.secrets.apiServerKey & char(10) &
+			"HERMES_DASHBOARD_BASIC_AUTH_USERNAME=" & arguments.plan.values.dashboardUsername.value & char(10) &
+			"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=" & arguments.secrets.dashboardPassword & char(10) &
+			"HERMES_DASHBOARD_BASIC_AUTH_SECRET=" & arguments.secrets.dashboardSecret & char(10);
+	}
+
+	private function registrySettings(required string image, required string token) {
+		if (arguments.token == "") return { host : "-", username : "-" };
+		var parts = listToArray(arguments.image, "/", false, true);
+		if (arrayLen(parts) < 3 || parts[1] != "ghcr.io" || arrayLen(reMatch("^[A-Za-z0-9][A-Za-z0-9-]*$", parts[2])) == 0) {
+			fail("a registry token requires a ghcr.io image with a valid owner");
+		}
+		return { host : parts[1], username : parts[2] };
+	}
+
+	private function copyToRemote(
+		required string localPath,
+		required string remotePath,
+		required string target,
+		required array sshOptions
+	) {
+		var result = variables.runner.run(
+			"scp",
+			appendArguments(arguments.sshOptions, [ "-p", arguments.localPath, arguments.target & ":" & arguments.remotePath ])
+		);
+		requireSuccess(result, "copying a temporary runtime file");
+	}
+
+	private function removeRemote(required string remotePath, required string target, required array sshOptions) {
+		try {
+			return succeeded(executeSsh(
+				arguments.sshOptions,
+				arguments.target,
+				[ "/bin/rm", "-f", "--", arguments.remotePath ]
+			));
+		} catch (error) {
+			return false;
+		}
+	}
+
+	private function executeSsh(required array sshOptions, required string target, required array remoteArguments) {
+		return variables.runner.run(
+			"ssh",
+			appendArguments(arguments.sshOptions, appendArguments([ arguments.target ], arguments.remoteArguments))
+		);
+	}
+
+	private function remoteTempPath(required string suffix) {
+		return "/tmp/agentctl-" & reReplace(lCase(createUUID()), "[^a-z0-9]", "", "all") & arguments.suffix;
+	}
+
+	private function secureTempFile(required string prefix, required string suffix, required string content) {
+		var path = createTempFile(getSystemSetting("TMPDIR", "/tmp"), arguments.prefix, arguments.suffix);
+		try {
+			fileSetAccessMode(path, "600");
+			fileWrite(path, arguments.content);
+			return path;
+		} catch (error) {
+			deleteSensitiveFile(path);
+			rethrow;
+		}
+	}
+
+	private function deleteSensitiveFile(string path = "") {
+		if (arguments.path == "") return;
+		if (fileExists(arguments.path) && !directoryExists(arguments.path)) fileDelete(arguments.path);
+		if (fileExists(arguments.path)) fail("could not remove a sensitive temporary file");
+	}
+
+	private function deleteSensitiveFiles(required array paths) {
+		var failed = false;
+		for (var path in arguments.paths) {
+			try {
+				deleteSensitiveFile(path);
+			} catch (error) {
+				failed = true;
+			}
+		}
+		if (failed) fail("could not remove one or more sensitive temporary files");
+	}
+
+	private function runDoctl(required array commandArguments, required string label) {
+		var result = variables.runner.run("doctl", arguments.commandArguments);
+		requireSuccess(result, arguments.label);
+		return result;
+	}
+
+	private function requireSuccess(required struct result, required string label) {
+		if (!succeeded(arguments.result)) {
+			fail(arguments.label & (structKeyExists(arguments.result, "timeout") && arguments.result.timeout ? " timed out" : " failed"));
+		}
+	}
+
+	private function succeeded(required struct result) {
+		return structKeyExists(arguments.result, "exitCode") &&
+			!isNull(arguments.result.exitCode) &&
+			arguments.result.exitCode == 0 &&
+			(!structKeyExists(arguments.result, "timeout") || !arguments.result.timeout);
+	}
+
+	private function parseRows(required string output, required numeric columns) {
+		var rows = [];
+		var text = trim(replace(arguments.output, char(13), "", "all"));
+		if (text == "") return rows;
+		for (var line in listToArray(text, char(10), false, true)) {
+			var tokens = reMatch("[^[:space:]]+", line);
+			if (arrayLen(tokens) < arguments.columns) fail("could not parse a DigitalOcean response");
+			arrayAppend(rows, tokens);
+		}
+		return rows;
+	}
+
+	private function appendArguments(required array first, required array second) {
+		var result = [];
+		for (var value in arguments.first) arrayAppend(result, value);
+		for (var value in arguments.second) arrayAppend(result, value);
+		return result;
+	}
+
+	private function linesToText(required array lines, boolean trailingNewline = true) {
+		return joinValues(arguments.lines, char(10)) & (arguments.trailingNewline ? char(10) : "");
+	}
+
+	private function joinValues(required array values, required string delimiter) {
+		var result = "";
+		for (var index = 1; index <= arrayLen(arguments.values); index++) {
+			result &= (index == 1 ? "" : arguments.delimiter) & arguments.values[index];
+		}
+		return result;
+	}
+
+	private function announce(required string message) {
+		systemOutput(arguments.message, true);
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}

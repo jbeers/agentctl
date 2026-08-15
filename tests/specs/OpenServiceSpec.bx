@@ -1,0 +1,64 @@
+import tests.support.FakeCommandRunner;
+
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("OpenService", () => {
+			it("opens the effective private dashboard hostname without doctl", () => {
+				var runner = new FakeCommandRunner([], {
+					"xdg-open" : true,
+					open : true,
+					doctl : false
+				});
+				var plan = new src.services.BundleService().parse(
+					{ version : 2, identity : { name : "test-agent" } },
+					{ hostname : "test-agent-1" }
+				);
+				var service = new src.services.OpenService(runner);
+				var result = service.launch(plan, true);
+
+				expect(result.url).toBe("http://test-agent-1:9119");
+				expect(service.format(result)).toBe("Opened Hermes dashboard at http://test-agent-1:9119 using xdg-open.");
+				expect(runner.getCalls()).toHaveLength(1);
+				expect(runner.getCalls()[1].executable).toBe("xdg-open");
+				expect(runner.getCalls()[1].arguments).toBe([ "http://test-agent-1:9119" ]);
+				expect(runner.getAvailabilityChecks()).notToInclude("doctl");
+			});
+
+			it("falls back to macOS open and reports launcher failures safely", () => {
+				var plan = new src.services.BundleService().parse({
+					version : 2,
+					identity : { name : "test-agent" }
+				});
+				var fallback = new FakeCommandRunner([], { "xdg-open" : false, open : true });
+				var fallbackService = new src.services.OpenService(fallback);
+				expect(fallbackService.launch(plan).launcher).toBe("open");
+				expect(fallback.getCalls()[1].executable).toBe("open");
+
+				var failure = new FakeCommandRunner(
+					[],
+					{ "xdg-open" : true },
+					(executable, commandArguments, input) => {
+						return { exitCode : 1, output : "", error : "must-not-leak", timeout : false };
+					}
+				);
+				expect(() => new src.services.OpenService(failure).launch(plan)).toThrow(
+					message="opening the Hermes dashboard failed"
+				);
+			});
+
+			it("fails clearly when no browser launcher is installed", () => {
+				var runner = new FakeCommandRunner([], { "xdg-open" : false, open : false });
+				var plan = new src.services.BundleService().parse({
+					version : 2,
+					identity : { name : "test-agent" }
+				});
+
+				expect(() => new src.services.OpenService(runner).launch(plan)).toThrow(
+					message="no supported browser launcher found; install xdg-open or open"
+				);
+			});
+		});
+	}
+
+}
