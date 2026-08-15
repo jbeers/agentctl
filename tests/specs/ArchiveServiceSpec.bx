@@ -22,6 +22,7 @@ class extends="testbox.system.BaseSpec" {
 					expect(result.exitCode).toBe(0, result.error);
 					expect(trim(fileRead(target & "/.env"))).toBe("RESTORED_VALUE=authoritative");
 					expect(trim(fileRead(target & "/config/value.txt"))).toBe("restored-state");
+					expect(trim(fileRead(target & "/.git/HEAD"))).toBe("ref: refs/heads/private-work");
 					expect(fileMode(target & "/bin/tool")).toBe("755");
 					expect(systemExecute("stat", [ "-c", "%i", target & "/config/value.txt" ]).output).toBe(
 						systemExecute("stat", [ "-c", "%i", target & "/config/value-hard" ]).output
@@ -30,6 +31,27 @@ class extends="testbox.system.BaseSpec" {
 					cleanupPrepared(prepared);
 					cleanupPath(archive);
 					cleanupPath(target);
+				}
+			});
+
+			it("reuses the same format and restrictive staging for workspace archives", () => {
+				var archive = makeArchive("valid");
+				var invalid = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-invalid-workspace-", ".tar");
+				fileWrite(invalid, "workspace-private-bytes");
+				var service = new src.services.ArchiveService(new src.services.CommandRunner());
+				var prepared = {};
+				try {
+					prepared = service.prepare(archive, "workspace");
+					expect(prepared.archiveType).toBe("workspace");
+					expect(prepared.temporaryPath).toInclude("agentctl-workspace-archive-");
+					expect(fileMode(prepared.temporaryPath)).toBe("600");
+					expect(() => service.prepare(invalid, "workspace")).toThrow(
+						message="workspace archive contains unsafe or invalid entries"
+					);
+				} finally {
+					cleanupPrepared(prepared);
+					cleanupPath(archive);
+					cleanupPath(invalid);
 				}
 			});
 
@@ -99,7 +121,7 @@ class extends="testbox.system.BaseSpec" {
 					prepared = service.prepare(archive);
 					var result = runExtraction(service, prepared.temporaryPath, target);
 					expect(result.exitCode).toBe(4);
-					expect(result.error).toInclude("persistent state is not empty");
+					expect(result.error).toInclude("archive target is not empty");
 					expect(result.error).notToInclude("existing.txt");
 					expect(fileRead(target & "/existing.txt")).toBe("keep-me");
 					expect(fileExists(target & "/.env")).toBeFalse();
@@ -119,7 +141,7 @@ class extends="testbox.system.BaseSpec" {
 					prepared = service.prepare(archive);
 					var result = runExtraction(service, prepared.temporaryPath, target);
 					expect(result.exitCode).toBe(5);
-					expect(result.error).toBe("state archive extraction failed; partial restored state was removed");
+					expect(result.error).toBe("archive extraction failed; partial content was removed");
 					expect(directoryList(target)).toHaveLength(0);
 				} finally {
 					cleanupPrepared(prepared);
@@ -166,6 +188,8 @@ class extends="testbox.system.BaseSpec" {
 			"    if scenario == 'valid':",
 			"        add_file(archive, '.env', 'RESTORED_VALUE=authoritative' + chr(10))",
 			"        add_file(archive, 'config/value.txt', 'restored-state' + chr(10), 0o640)",
+			"        add_file(archive, '.git/HEAD', 'ref: refs/heads/private-work' + chr(10), 0o640)",
+			"        add_file(archive, 'compose.yaml', 'services: {}' + chr(10), 0o640)",
 			"        add_file(archive, 'bin/tool', chr(10).join(('##!/bin/sh', 'exit 0', '')), 0o755)",
 			"        link = tarfile.TarInfo('config/value-link')",
 			"        link.type = tarfile.SYMTYPE",

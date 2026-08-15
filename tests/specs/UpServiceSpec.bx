@@ -95,7 +95,8 @@ class extends="testbox.system.BaseSpec" {
 					expect(fileExists(state.archivePath)).toBeFalse();
 					expect(state.remoteArchive).toMatch("^root@test-agent:/tmp/agentctl-[a-z0-9]+[.]tar$");
 					expect(state.remoteRemovals).toBe(3);
-					expect(state.runtimeArguments[arrayLen(state.runtimeArguments)]).toMatch("^/tmp/agentctl-[a-z0-9]+[.]tar$");
+					expect(state.runtimeArguments[arrayLen(state.runtimeArguments) - 1]).toMatch("^/tmp/agentctl-[a-z0-9]+[.]tar$");
+					expect(state.runtimeArguments[arrayLen(state.runtimeArguments)]).toBe("-");
 					expect(state.runtimeScript).toInclude("python3 - extract");
 					expect(find("python3 - extract", state.runtimeScript)).toBeLT(find("env_tmp=$(mktemp", state.runtimeScript));
 					for (var call in runner.getCalls()) {
@@ -103,6 +104,86 @@ class extends="testbox.system.BaseSpec" {
 					}
 				} finally {
 					if (fileExists(archive)) fileDelete(archive);
+				}
+			});
+
+			it("seeds a workspace archive and reports that /workdir remains disposable", () => {
+				var archive = workspaceArchive();
+				var state = providerState();
+				var runner = scriptedRunner(state);
+				var service = new src.services.UpService(runner, 1, 0);
+				try {
+					var result = service.up(resolvedBundle("test-agent"), true, "", archive);
+					var output = service.format(result);
+					result.verbose = false;
+					var normalOutput = service.format(result);
+
+					expect(output).toInclude("Workspace archive: seeded before Hermes startup");
+					expect(output).toInclude("Workspace persistence: /workdir remains disposable");
+					expect(output).toInclude(getCanonicalPath(archive));
+					expect(output).notToInclude("workspace-private-marker");
+					expect(output).notToInclude("private-work");
+					expect(normalOutput).notToInclude(getCanonicalPath(archive));
+					expect(state.archivePaths).toHaveLength(1);
+					expect(state.archivePaths[1]).toInclude("agentctl-workspace-archive-");
+					expect(state.archiveModes[1]).toBe("600");
+					expect(fileExists(state.archivePaths[1])).toBeFalse();
+					expect(state.runtimeArguments[arrayLen(state.runtimeArguments) - 1]).toBe("-");
+					expect(state.runtimeArguments[arrayLen(state.runtimeArguments)]).toMatch("^/tmp/agentctl-[a-z0-9]+[.]tar$");
+					expect(state.remoteRemovals).toBe(3);
+					for (var call in runner.getCalls()) {
+						expect(call.executable).notToBe("git");
+						expect(jsonSerialize(call.arguments)).notToInclude("workspace-private-marker");
+						expect(jsonSerialize(call.arguments)).notToInclude("private-work");
+					}
+				} finally {
+					if (fileExists(archive)) fileDelete(archive);
+				}
+			});
+
+			it("restores state and workspace archives to distinct destinations together", () => {
+				var stateInput = stateArchive();
+				var workspaceInput = workspaceArchive();
+				var state = providerState();
+				var service = new src.services.UpService(scriptedRunner(state), 1, 0);
+				try {
+					var result = service.up(resolvedBundle("test-agent"), true, stateInput, workspaceInput);
+					var output = service.format(result);
+
+					expect(output).toInclude("State archive: restored before Hermes startup");
+					expect(output).toInclude("Workspace archive: seeded before Hermes startup");
+					expect(state.archivePaths).toHaveLength(2);
+					expect(state.archivePaths[1]).toInclude("agentctl-state-archive-");
+					expect(state.archivePaths[2]).toInclude("agentctl-workspace-archive-");
+					expect(fileExists(state.archivePaths[1])).toBeFalse();
+					expect(fileExists(state.archivePaths[2])).toBeFalse();
+					expect(state.runtimeArguments[arrayLen(state.runtimeArguments) - 1]).toMatch("^/tmp/agentctl-[a-z0-9]+[.]tar$");
+					expect(state.runtimeArguments[arrayLen(state.runtimeArguments)]).toMatch("^/tmp/agentctl-[a-z0-9]+[.]tar$");
+					expect(state.runtimeArguments[arrayLen(state.runtimeArguments) - 1]).notToBe(state.runtimeArguments[arrayLen(state.runtimeArguments)]);
+					expect(state.runtimeScript).toInclude('python3 - extract "$state_archive" "$mount_dir"');
+					expect(state.runtimeScript).toInclude('python3 - extract "$workspace_archive" /workdir');
+					expect(state.remoteRemovals).toBe(4);
+				} finally {
+					if (fileExists(stateInput)) fileDelete(stateInput);
+					if (fileExists(workspaceInput)) fileDelete(workspaceInput);
+				}
+			});
+
+			it("blocks Hermes and cleans both archives when workspace seeding fails", () => {
+				var stateInput = stateArchive();
+				var workspaceInput = workspaceArchive();
+				var state = providerState({ runtimeExitCode : 54 });
+				try {
+					expect(() => new src.services.UpService(scriptedRunner(state), 1, 0).up(
+						resolvedBundle("test-agent"), false, stateInput, workspaceInput
+					)).toThrow(message="workspace is not empty; workspace archive seeding was refused");
+					expect(state.runtimeExecutions).toBe(1);
+					expect(state.remoteRemovals).toBe(4);
+					expect(state.archivePaths).toHaveLength(2);
+					for (var path in state.archivePaths) expect(fileExists(path)).toBeFalse();
+				} finally {
+					if (fileExists(stateInput)) fileDelete(stateInput);
+					if (fileExists(workspaceInput)) fileDelete(workspaceInput);
 				}
 			});
 
@@ -248,12 +329,18 @@ class extends="testbox.system.BaseSpec" {
 				expect(script).toInclude('[[ -z $env_tmp ]] || rm -f -- "$env_tmp"');
 				expect(script).toInclude('grep -q "^${initial_key}=." "$env_tmp"');
 				expect(script).toInclude("persistent state is not empty; state archive restore was refused");
-				expect(script).toInclude("state archive extraction failed; partial restored state was removed");
+				expect(script).toInclude("archive extraction failed; partial content was removed");
 				expect(script).toInclude("Hermes .env must be a regular file");
-				expect(script).toInclude('find "$restore_target" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf -- {} +');
+				expect(script).toInclude('find "$state_restore_target" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf -- {} +');
+				expect(script).toInclude('find "$workspace_restore_target" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +');
+				expect(script).toInclude("workspace is not empty; workspace archive seeding was refused");
+				expect(script).toInclude('python3 - extract "$workspace_archive" /workdir');
+				expect(script).toInclude("state_restore_pending=true");
+				expect(script).toInclude("workspace_restore_pending=true");
 				expect(script).toInclude('chown -R "$agent_uid:$agent_gid" "$mount_dir"');
 				expect(script).toInclude('podman_as_agent unshare chown -R 10000:10000 "$mount_dir"');
 				expect(find("python3 - extract", script)).toBeLT(find("env_tmp=$(mktemp", script));
+				expect(find('python3 - extract "$workspace_archive" /workdir', script)).toBeLT(find("podman-compose --version", script));
 				expect(find("env_tmp=$(mktemp", script)).toBeLT(find("/etc/agentctl/hermes-launcher.env", script));
 				expect(script).toInclude("/etc/agentctl/hermes-launcher.env");
 				expect(script).toInclude("HERMES_WRITE_SAFE_ROOT=/opt/data:/workdir");
@@ -272,6 +359,8 @@ class extends="testbox.system.BaseSpec" {
 				expect(script).notToInclude("/var/run/docker.sock");
 				expect(script).notToInclude("--volume /:/");
 				expect(script).notToInclude("podman system service");
+				expect(script).notToInclude("git remote");
+				expect(script).notToInclude("git status");
 				expect(script).notToInclude("telegram");
 			});
 		});
@@ -336,6 +425,10 @@ class extends="testbox.system.BaseSpec" {
 			archiveMode : "",
 			archiveSize : 0,
 			remoteArchive : "",
+			archivePaths : [],
+			archiveModes : [],
+			archiveSizes : [],
+			remoteArchives : [],
 			scriptPath : "",
 			scriptMode : "",
 			runtimeScript : "",
@@ -378,10 +471,19 @@ class extends="testbox.system.BaseSpec" {
 			if (arguments.executable == "scp") {
 				var localPath = arguments.commandArguments[arrayLen(arguments.commandArguments) - 1];
 				if (right(localPath, 4) == ".tar") {
-					state.archivePath = localPath;
-					state.archiveMode = fileMode(localPath);
-					state.archiveSize = getFileInfo(localPath).size;
-					state.remoteArchive = arguments.commandArguments[arrayLen(arguments.commandArguments)];
+					var archiveMode = fileMode(localPath);
+					var archiveSize = getFileInfo(localPath).size;
+					var remoteArchive = arguments.commandArguments[arrayLen(arguments.commandArguments)];
+					arrayAppend(state.archivePaths, localPath);
+					arrayAppend(state.archiveModes, archiveMode);
+					arrayAppend(state.archiveSizes, archiveSize);
+					arrayAppend(state.remoteArchives, remoteArchive);
+					if (state.archivePath == "") {
+						state.archivePath = localPath;
+						state.archiveMode = archiveMode;
+						state.archiveSize = archiveSize;
+						state.remoteArchive = remoteArchive;
+					}
 					if (state.failArchiveTransfer) return failure("must-not-leak");
 				} else if (right(localPath, 8) == ".payload") {
 					state.payloadPath = localPath;
@@ -429,6 +531,22 @@ class extends="testbox.system.BaseSpec" {
 			fileWrite(source & "/state.txt", "restored");
 			var result = systemExecute("tar", [ "-cf", archive, "-C", source, ".env", "state.txt" ]);
 			if (result.exitCode != 0) throw "could not create state archive fixture";
+			return archive;
+		} finally {
+			directoryDelete(source, true);
+		}
+	}
+
+	private function workspaceArchive() {
+		var source = createTempDirectory(getSystemSetting("TMPDIR", "/tmp"), "agentctl-workspace-source-");
+		var archive = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-workspace-input-", ".tar");
+		try {
+			directoryCreate(source & "/.git");
+			fileWrite(source & "/.git/HEAD", "ref: refs/heads/private-work");
+			fileWrite(source & "/known.txt", "workspace-private-marker");
+			fileWrite(source & "/compose.yaml", "services: {}" & char(10));
+			var result = systemExecute("tar", [ "-cf", archive, "-C", source, "." ]);
+			if (result.exitCode != 0) throw "could not create workspace archive fixture";
 			return archive;
 		} finally {
 			directoryDelete(source, true);

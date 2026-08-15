@@ -34,9 +34,7 @@ function usage(boolean errorStream = false) {
 		"  --hostname <tailscale-hostname>",
 		"  --runtime-image <image:tag>",
 		"  --state-archive <path>       Restore fresh Hermes state; never stored in the bundle",
-		"",
-		"Inspect-only options:",
-		"  --workspace-archive <path>   Per invocation; never stored in the bundle",
+		"  --workspace-archive <path>   Seed fresh /workdir; never stored in the bundle",
 		"",
 		"Common options:",
 		"  --verbose",
@@ -142,7 +140,8 @@ try {
 		result = up.up(
 			bundles.resolveForUse(command.file, command.overrides),
 			command.verbose,
-			structKeyExists(command.overrides, "stateArchive") ? command.overrides.stateArchive : ""
+			structKeyExists(command.overrides, "stateArchive") ? command.overrides.stateArchive : "",
+			structKeyExists(command.overrides, "workspaceArchive") ? command.overrides.workspaceArchive : ""
 		);
 		systemOutput(up.format(result), true);
 		exit(0);

@@ -23,7 +23,7 @@ class {
 			action == "init" ?
 				"file,name,region,size,hostname,runtime-image,dashboard-username,age-recipient,verbose" :
 				action == "up" ?
-					"file,region,size,hostname,runtime-image,state-archive,verbose" :
+					"file,region,size,hostname,runtime-image,state-archive,workspace-archive,verbose" :
 					(action == "open" || action == "down") ?
 						"file,hostname,verbose" :
 						"file,verbose";
@@ -79,8 +79,6 @@ class {
 			copyOption(options, "hostname", result.overrides, "hostname");
 			if (action == "inspect" || action == "up") {
 				copyOption(options, "state-archive", result.overrides, "stateArchive");
-			}
-			if (action == "inspect") {
 				copyOption(options, "workspace-archive", result.overrides, "workspaceArchive");
 			}
 			return result;

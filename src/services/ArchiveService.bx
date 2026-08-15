@@ -5,10 +5,12 @@ class {
 		return this;
 	}
 
-	function prepare(required string path) {
-		if (trim(arguments.path) == "") fail("--state-archive requires a non-empty path");
-		if (arrayLen(reMatch("[[:cntrl:]]", arguments.path)) > 0) fail("state archive path contains unsupported characters");
-		if (!variables.runner.isAvailable("python3")) fail("python3 is required to restore a state archive");
+	function prepare(required string path, string archiveType = "state") {
+		var type = lCase(trim(arguments.archiveType));
+		if (listFind("state,workspace", type) == 0) fail("archive type must be state or workspace");
+		if (trim(arguments.path) == "") fail("--" & type & "-archive requires a non-empty path");
+		if (arrayLen(reMatch("[[:cntrl:]]", arguments.path)) > 0) fail(type & " archive path contains unsupported characters");
+		if (!variables.runner.isAvailable("python3")) fail("python3 is required to restore a " & type & " archive");
 
 		var sourcePath = trim(arguments.path);
 		if (left(sourcePath, 1) != "/") {
@@ -16,12 +18,12 @@ class {
 			if (right(operatorDirectory, 1) != "/") operatorDirectory &= "/";
 			sourcePath = operatorDirectory & sourcePath;
 		}
-		var temporaryPath = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-state-archive-", ".tar");
+		var temporaryPath = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-" & type & "-archive-", ".tar");
 		try {
 			fileSetAccessMode(temporaryPath, "600");
 		} catch (error) {
 			deleteTemporary(temporaryPath);
-			fail("could not prepare the state archive");
+			fail("could not prepare the " & type & " archive");
 		}
 		var result = {};
 		try {
@@ -31,17 +33,17 @@ class {
 			);
 		} catch (error) {
 			deleteTemporary(temporaryPath);
-			fail("could not prepare the state archive");
+			fail("could not prepare the " & type & " archive");
 		}
 		if (!succeeded(result)) {
 			deleteTemporary(temporaryPath);
 			if (structKeyExists(result, "exitCode") && result.exitCode == 2) {
-				fail("state archive must be a readable regular tar file");
+				fail(type & " archive must be a readable regular tar file");
 			}
 			if (structKeyExists(result, "exitCode") && result.exitCode == 3) {
-				fail("state archive contains unsafe or invalid entries");
+				fail(type & " archive contains unsafe or invalid entries");
 			}
-			fail("could not prepare the state archive");
+			fail("could not prepare the " & type & " archive");
 		}
 
 		var metadata = {};
@@ -58,9 +60,10 @@ class {
 		}
 		if (!metadataValid) {
 			deleteTemporary(temporaryPath);
-			fail("could not prepare the state archive");
+			fail("could not prepare the " & type & " archive");
 		}
 		return {
+			archiveType : type,
 			sourcePath : metadata.source,
 			temporaryPath : temporaryPath,
 			size : metadata.size,
@@ -85,10 +88,10 @@ class {
 			"        super().__init__(message)",
 			"        self.code = code",
 			"",
-			"SOURCE_ERROR = 'state archive must be a readable regular tar file'",
-			"VALIDATION_ERROR = 'state archive contains unsafe or invalid entries'",
-			"TARGET_ERROR = 'persistent state is not empty; state archive restore was refused'",
-			"EXTRACTION_ERROR = 'state archive extraction failed; partial restored state was removed'",
+			"SOURCE_ERROR = 'archive source must be a readable regular tar file'",
+			"VALIDATION_ERROR = 'archive contains unsafe or invalid entries'",
+			"TARGET_ERROR = 'archive target is not empty; extraction was refused'",
+			"EXTRACTION_ERROR = 'archive extraction failed; partial content was removed'",
 			"",
 			"def invalid():",
 			"    raise ArchiveError(VALIDATION_ERROR, 3)",
@@ -248,7 +251,7 @@ class {
 			"        inspect_archive(sys.argv[2])",
 			"        extract_archive(sys.argv[2], sys.argv[3])",
 			"        return",
-			"    raise ArchiveError('state archive operation is invalid', 6)",
+			"    raise ArchiveError('archive operation is invalid', 6)",
 			"",
 			"try:",
 			"    main()",
@@ -256,7 +259,7 @@ class {
 			"    print(str(error), file=sys.stderr)",
 			"    sys.exit(error.code)",
 			"except Exception:",
-			"    print('state archive operation failed', file=sys.stderr)",
+			"    print('archive operation failed', file=sys.stderr)",
 			"    sys.exit(6)"
 		]);
 	}
