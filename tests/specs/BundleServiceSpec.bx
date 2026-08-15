@@ -1,0 +1,202 @@
+import tests.support.FakeCommandRunner;
+
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("BundleService", () => {
+			it("resolves and inspects a plaintext bundle without running commands", () => {
+				var runner = new FakeCommandRunner();
+				var service = new src.services.BundleService(runner);
+				var plan = service.resolve(fixture("plaintext.agent.yml"));
+				var output = service.formatInspection(plan);
+
+				expect(plan.values.name.value).toBe("sample-agent");
+				expect(plan.values.name.source).toBe("bundle");
+				expect(plan.values.region.value).toBe("sfo3");
+				expect(plan.values.computeSize.value).toBe("s-4vcpu-8gb");
+				expect(plan.values.computeSize.source).toBe("built-in default");
+				expect(plan.derived.dropletName).toBe("sample-agent");
+				expect(plan.derived.volumeName).toBe("agent-home-sample-agent");
+				expect(runner.getCalls()).toHaveLength(0);
+				expect(output).toInclude("Agent name: sample-agent [bundle]");
+				expect(output).toInclude("Compute size: s-4vcpu-8gb [built-in default]");
+				expect(output).toInclude("down retains: provider volume agent-home-sample-agent");
+				expect(output).toInclude("--state-archive: not provided [per invocation]");
+			});
+
+			it("treats empty optional bundle values as unset", () => {
+				var service = new src.services.BundleService(new FakeCommandRunner());
+				var plan = service.parse({
+					version : 2,
+					identity : { name : "empty-option-agent" },
+					compute : { region : "", size : "" },
+					access : { hostname : "" },
+					runtime : { image : "" },
+					hermes : { initial : { dashboardUsername : "" } }
+				});
+
+				expect(plan.values.region.value).toBe("nyc3");
+				expect(plan.values.region.source).toBe("built-in default");
+				expect(plan.values.hostname.value).toBe("empty-option-agent");
+				expect(plan.values.runtimeImage.value).toBe("ghcr.io/jbeers/cloud-agent-coder:sha-dfb0aaa");
+				expect(plan.values.dashboardUsername.value).toBe("admin");
+			});
+
+			it("applies CLI overrides first and does not print archive paths", () => {
+				var service = new src.services.BundleService(new FakeCommandRunner());
+				var plan = service.resolve(fixture("plaintext.agent.yml"), {
+					region : "fra1",
+					size : "s-2vcpu-4gb",
+					hostname : "cli-agent",
+					runtimeImage : "ghcr.io/example/hermes:sha-cli",
+					stateArchive : "/private/recovery-name.tar",
+					workspaceArchive : "/private/workspace-name.tar"
+				});
+				var output = service.formatInspection(plan);
+
+				expect(plan.values.region.source).toBe("CLI argument");
+				expect(output).toInclude("Region: fra1 [CLI argument]");
+				expect(output).toInclude("--state-archive: provided [CLI argument; not stored in bundle]");
+				expect(output).toInclude("--workspace-archive: provided [CLI argument; not stored in bundle]");
+				expect(output).notToInclude("recovery-name");
+				expect(output).notToInclude("workspace-name");
+			});
+
+			it("decrypts a partial SOPS bundle in memory and redacts all secret material", () => {
+				var decrypted = "version: 2" & char(10) &
+					"identity:" & char(10) &
+					"  name: encrypted-agent" & char(10) &
+					"compute:" & char(10) &
+					"  region: ams3" & char(10) &
+					"runtime:" & char(10) &
+					"  image: ghcr.io/example/hermes:sha-7654321" & char(10) &
+					"secrets:" & char(10) &
+					"  sshPrivateKey: |" & char(10) &
+					"    -----BEGIN OPENSSH PRIVATE KEY-----" & char(10) &
+					"    decrypted-private-material" & char(10) &
+					"    -----END OPENSSH PRIVATE KEY-----" & char(10) &
+					"  tailscaleAuthKey: tskey-auth-decrypted_test" & char(10) &
+					"  registryToken: decrypted-registry-token" & char(10) &
+					"  hermes:" & char(10) &
+					"    apiServerKey: decrypted-api-key" & char(10) &
+					"    dashboardPassword: decrypted-password" & char(10) &
+					"    dashboardSecret: decrypted-dashboard-secret" & char(10);
+				var runner = new FakeCommandRunner([
+					{ exitCode : 0, output : decrypted, error : "", timeout : false }
+				]);
+				var service = new src.services.BundleService(runner);
+				var encryptedPath = fixture("encrypted.agent.yml");
+				var source = fileRead(encryptedPath);
+				var output = service.inspect(encryptedPath);
+				var call = runner.getCalls()[1];
+
+				expect(source).toInclude("name: encrypted-agent");
+				expect(source).toInclude("ENC[AES256_GCM");
+				expect(call.executable).toBe("sops");
+				expect(call.arguments).toBe([
+					"--decrypt", "--output-type", "yaml", getCanonicalPath(encryptedPath)
+				]);
+				expect(runner.getCalls()).toHaveLength(1);
+				expect(output).toInclude("SSH private key: generated");
+				expect(output).toInclude("Tailscale enrollment key: configured");
+				expect(output).toInclude("Hermes API key: generated");
+				expect(output).notToInclude("decrypted-");
+				expect(output).notToInclude("tskey-auth-");
+				expect(output).notToInclude("ENC[");
+			});
+
+			it("rejects unknown keys, wrong types, unsupported versions, and missing identity", () => {
+				var service = new src.services.BundleService(new FakeCommandRunner());
+
+				expect(() => service.parse({
+					version : 2,
+					identity : { name : "test-agent" },
+					unexpected : true
+				})).toThrow(message="bundle contains unknown key 'unexpected'");
+				expect(() => service.parse({
+					version : 2,
+					identity : { name : "test-agent" },
+					compute : { size : [] }
+				})).toThrow(message="bundle.compute.size must be a string");
+				expect(() => service.parse({
+					version : "2",
+					identity : { name : "test-agent" }
+				})).toThrow(message="bundle.version must be the number 2");
+				expect(() => service.parse({
+					version : 1,
+					identity : { name : "test-agent" }
+				})).toThrow(message="unsupported agent bundle version '1'; expected 2");
+				expect(() => service.parse({ version : 2 })).toThrow(
+					message="bundle.identity is required"
+				);
+				expect(() => service.parse({ version : 2, identity : {} })).toThrow(
+					message="bundle.identity.name is required"
+				);
+				expect(() => service.parse({ version : 2, identity : { name : 42 } })).toThrow(
+					message="bundle.identity.name must be a string"
+				);
+			});
+
+			it("rejects plaintext secrets and ciphertext outside the secret subtree", () => {
+				var service = new src.services.BundleService(new FakeCommandRunner());
+				expect(() => service.parse({
+					version : 2,
+					identity : { name : "test-agent" },
+					secrets : { tailscaleAuthKey : "tskey-auth-plaintext" }
+				})).toThrow(message="bundle secret values must be SOPS-encrypted");
+
+				var path = writeBundle(
+					"version: 2" & char(10) &
+					"identity:" & char(10) &
+					"  name: ENC[AES256_GCM,data:dGVzdA==,type:str]" & char(10)
+				);
+				try {
+					expect(() => service.resolve(path)).toThrow(
+						message="bundle.identity.name must remain readable; only bundle.secrets may be encrypted"
+					);
+				} finally {
+					fileDelete(path);
+				}
+			});
+
+			it("reports malformed YAML and missing SOPS without leaking content", () => {
+				var service = new src.services.BundleService(new FakeCommandRunner());
+				expect(() => service.resolve(fixture("malformed.agent.yml"))).toThrow(
+					message="agent bundle is not valid YAML"
+				);
+
+				var unavailable = new src.services.BundleService(new FakeCommandRunner([], false));
+				expect(() => unavailable.resolve(fixture("encrypted.agent.yml"))).toThrow(
+					message="sops is required to decrypt the agent bundle"
+				);
+			});
+
+			it("sanitizes SOPS failures and malformed decrypted output", () => {
+				var failedRunner = new FakeCommandRunner([
+					{ exitCode : 1, output : "", error : "decrypted-registry-token", timeout : false }
+				]);
+				expect(() => new src.services.BundleService(failedRunner).resolve(
+					fixture("encrypted.agent.yml")
+				)).toThrow(message="could not decrypt the agent bundle");
+
+				var malformedRunner = new FakeCommandRunner([
+					{ exitCode : 0, output : "secret-value: [", error : "", timeout : false }
+				]);
+				expect(() => new src.services.BundleService(malformedRunner).resolve(
+					fixture("encrypted.agent.yml")
+				)).toThrow(message="decrypted agent bundle is not valid YAML");
+			});
+		});
+	}
+
+	private function fixture(required string name) {
+		return getCanonicalPath(getDirectoryFromPath(getCurrentTemplatePath()) & "../fixtures/" & arguments.name);
+	}
+
+	private function writeBundle(required string content) {
+		var path = createTempFile(getTempDirectory(), "agentctl-bundle-", ".yml");
+		fileWrite(path, arguments.content);
+		return path;
+	}
+
+}

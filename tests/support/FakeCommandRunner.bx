@@ -1,0 +1,44 @@
+class {
+
+	function init(array responses = [], boolean available = true) {
+		variables.responses = arguments.responses;
+		variables.available = arguments.available;
+		variables.calls = [];
+		return this;
+	}
+
+	function run(
+		required string executable,
+		array commandArguments = [],
+		numeric timeout = 0,
+		boolean terminateOnTimeout = false,
+		any directory = null,
+		any output = null,
+		any error = null,
+		boolean inheritEnvironment = true,
+		struct environment = {},
+		boolean inheritIO = false,
+		any input = null
+	) {
+		arrayAppend(variables.calls, {
+			executable : arguments.executable,
+			arguments : arguments.commandArguments,
+			input : arguments.input
+		});
+		if (arrayLen(variables.responses) > 0) {
+			var response = variables.responses[1];
+			arrayDeleteAt(variables.responses, 1);
+			return response;
+		}
+		return { exitCode : 0, output : "", error : "", timeout : false };
+	}
+
+	function isAvailable(required string executable) {
+		return variables.available;
+	}
+
+	function getCalls() {
+		return variables.calls;
+	}
+
+}

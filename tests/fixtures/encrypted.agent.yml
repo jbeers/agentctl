@@ -1,0 +1,19 @@
+version: 2
+identity:
+  name: encrypted-agent
+compute:
+  region: ams3
+runtime:
+  image: ghcr.io/example/hermes:sha-7654321
+secrets:
+  sshPrivateKey: "ENC[AES256_GCM,data:cHJpdmF0ZQ==,iv:dGVzdA==,tag:dGVzdA==,type:str]"
+  tailscaleAuthKey: "ENC[AES256_GCM,data:dGFpbHNjYWxl,iv:dGVzdA==,tag:dGVzdA==,type:str]"
+  registryToken: "ENC[AES256_GCM,data:cmVnaXN0cnk=,iv:dGVzdA==,tag:dGVzdA==,type:str]"
+  hermes:
+    apiServerKey: "ENC[AES256_GCM,data:YXBp,iv:dGVzdA==,tag:dGVzdA==,type:str]"
+    dashboardPassword: "ENC[AES256_GCM,data:cGFzc3dvcmQ=,iv:dGVzdA==,tag:dGVzdA==,type:str]"
+    dashboardSecret: "ENC[AES256_GCM,data:c2VjcmV0,iv:dGVzdA==,tag:dGVzdA==,type:str]"
+sops:
+  age: []
+  mac: "ENC[AES256_GCM,data:bWFj,iv:dGVzdA==,tag:dGVzdA==,type:str]"
+  version: 3.9.4

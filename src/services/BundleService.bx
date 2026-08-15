@@ -1,0 +1,490 @@
+class {
+
+	function init(any commandRunner = null) {
+		variables.runner = arguments.commandRunner;
+		return this;
+	}
+
+	function inspect(required string path, struct overrides = {}) {
+		return formatInspection(resolve(arguments.path, arguments.overrides));
+	}
+
+	function resolve(required string path, struct overrides = {}) {
+		var content = "";
+		var canonicalPath = "";
+		try {
+			if (!fileExists(arguments.path) || directoryExists(arguments.path)) {
+				fail("agent bundle does not exist or is not readable");
+			}
+			canonicalPath = getCanonicalPath(arguments.path);
+			content = fileRead(canonicalPath);
+		} catch (error) {
+			fail("agent bundle does not exist or is not readable");
+		}
+
+		var source = parseYaml(content, "agent bundle is not valid YAML");
+		validateDocument(source, false);
+		assertReadable(source);
+		var encrypted = structKeyExists(source, "sops");
+		assertSecretProtection(section(source, "secrets", "bundle.secrets", false), encrypted);
+
+		var document = source;
+		if (encrypted) {
+			if (isNull(variables.runner) || !variables.runner.isAvailable("sops")) {
+				fail("sops is required to decrypt the agent bundle");
+			}
+			var decrypted = {};
+			try {
+				decrypted = variables.runner.run(
+					"sops",
+					[ "--decrypt", "--output-type", "yaml", canonicalPath ],
+					0,
+					false,
+					null,
+					null,
+					null,
+					true,
+					{}
+				);
+			} catch (error) {
+				fail("could not decrypt the agent bundle");
+			}
+			if (
+				!structKeyExists(decrypted, "exitCode") ||
+				isNull(decrypted.exitCode) ||
+				decrypted.exitCode != 0 ||
+				!structKeyExists(decrypted, "output") ||
+				isNull(decrypted.output)
+			) {
+				fail("could not decrypt the agent bundle");
+			}
+			document = parseYaml(decrypted.output, "decrypted agent bundle is not valid YAML");
+			validateDocument(document, true);
+		}
+
+		var plan = buildPlan(document, arguments.overrides);
+		plan.bundlePath = canonicalPath;
+		plan.encrypted = encrypted;
+		return plan;
+	}
+
+	function parse(required any raw, struct overrides = {}) {
+		validateDocument(arguments.raw, true);
+		assertReadable(arguments.raw);
+		assertSecretProtection(section(arguments.raw, "secrets", "bundle.secrets", false), false);
+		var plan = buildPlan(arguments.raw, arguments.overrides);
+		plan.bundlePath = "";
+		plan.encrypted = false;
+		return plan;
+	}
+
+	function formatInspection(required struct plan) {
+		var values = arguments.plan.values;
+		var lines = [
+			"Agent bundle v2",
+			"",
+			"Effective plan:",
+			formatValue("Agent name", values.name),
+			formatValue("Compute provider", values.computeProvider),
+			formatValue("Compute size", values.computeSize),
+			formatValue("Region", values.region),
+			formatValue("Tailscale hostname", values.hostname),
+			formatValue("Runtime image", values.runtimeImage),
+			formatValue("Access method", values.accessMethod),
+			formatValue("Working-state strategy", values.stateStrategy),
+			formatValue("Working-state size", values.stateSize),
+			formatValue("Initial dashboard username", values.dashboardUsername),
+			"",
+			"Derived resources:",
+			"  Droplet name: " & arguments.plan.derived.dropletName & " [derived from Agent name]",
+			"  Volume name: " & arguments.plan.derived.volumeName & " [derived from Agent name]",
+			"",
+			"Secrets (values are never shown):",
+			"  SSH private key: " & arguments.plan.secrets.sshPrivateKey,
+			"  Tailscale enrollment key: " & arguments.plan.secrets.tailscaleAuthKey,
+			"  Registry pull token: " & arguments.plan.secrets.registryToken,
+			"  Hermes API key: " & arguments.plan.secrets.apiServerKey,
+			"  Hermes dashboard password: " & arguments.plan.secrets.dashboardPassword,
+			"  Hermes dashboard signing secret: " & arguments.plan.secrets.dashboardSecret,
+			"",
+			"Archive inputs:",
+			arguments.plan.archives.state ?
+				"  --state-archive: provided [CLI argument; not stored in bundle]" :
+				"  --state-archive: not provided [per invocation]",
+			arguments.plan.archives.workspace ?
+				"  --workspace-archive: provided [CLI argument; not stored in bundle]" :
+				"  --workspace-archive: not provided [per invocation]",
+			"",
+			"Lifecycle:",
+			"  down retains: provider volume " & arguments.plan.derived.volumeName & " mounted at /opt/data",
+			"  down discards: Droplet and /workdir",
+			"",
+			"Inspection only: no files or infrastructure were changed."
+		];
+		var output = "";
+		for (var line in lines) {
+			output &= (output == "" ? "" : char(10)) & line;
+		}
+		return output;
+	}
+
+	private function buildPlan(required struct document, required struct overrides) {
+		var identity = section(arguments.document, "identity", "bundle.identity", true);
+		var compute = section(arguments.document, "compute", "bundle.compute", false);
+		var state = section(arguments.document, "state", "bundle.state", false);
+		var access = section(arguments.document, "access", "bundle.access", false);
+		var runtime = section(arguments.document, "runtime", "bundle.runtime", false);
+		var hermes = section(arguments.document, "hermes", "bundle.hermes", false);
+		var initial = section(hermes, "initial", "bundle.hermes.initial", false);
+		var secretValues = section(arguments.document, "secrets", "bundle.secrets", false);
+		var hermesSecrets = section(secretValues, "hermes", "bundle.secrets.hermes", false);
+		var name = trim(identity.name);
+
+		var plan = {
+			values : {
+				name : sourced(name, "bundle"),
+				computeProvider : choose(compute, "provider", arguments.overrides, "", "digitalocean"),
+				computeSize : choose(compute, "size", arguments.overrides, "size", "s-4vcpu-8gb"),
+				region : choose(compute, "region", arguments.overrides, "region", "nyc3"),
+				hostname : choose(access, "hostname", arguments.overrides, "hostname", name),
+				runtimeImage : choose(runtime, "image", arguments.overrides, "runtimeImage", "ghcr.io/jbeers/cloud-agent-coder:sha-dfb0aaa"),
+				accessMethod : choose(access, "method", arguments.overrides, "", "openssh-over-tailscale"),
+				stateStrategy : choose(state, "strategy", arguments.overrides, "", "provider-volume"),
+				stateSize : choose(state, "size", arguments.overrides, "", "10GiB"),
+				dashboardUsername : choose(initial, "dashboardUsername", arguments.overrides, "", "admin")
+			},
+			secrets : {
+				sshPrivateKey : secretStatus(secretValues, "sshPrivateKey", true),
+				tailscaleAuthKey : secretStatus(secretValues, "tailscaleAuthKey", false),
+				registryToken : secretStatus(secretValues, "registryToken", false),
+				apiServerKey : secretStatus(hermesSecrets, "apiServerKey", true),
+				dashboardPassword : secretStatus(hermesSecrets, "dashboardPassword", false),
+				dashboardSecret : secretStatus(hermesSecrets, "dashboardSecret", true)
+			},
+			archives : {
+				state : archiveProvided(arguments.overrides, "stateArchive", "--state-archive"),
+				workspace : archiveProvided(arguments.overrides, "workspaceArchive", "--workspace-archive")
+			},
+			derived : {
+				dropletName : name,
+				volumeName : "agent-home-" & name
+			}
+		};
+		validateEffective(plan.values);
+		return plan;
+	}
+
+	private function validateDocument(required any raw, required boolean validateSecretValues) {
+		if (!isStruct(arguments.raw)) {
+			fail("agent bundle must be a YAML mapping");
+		}
+		validateKeys(arguments.raw, "version,identity,compute,state,access,runtime,hermes,secrets,sops", "bundle");
+		if (!structKeyExists(arguments.raw, "version")) {
+			fail("bundle.version is required");
+		}
+		if (!isNumeric(arguments.raw.version) || isStringValue(arguments.raw.version)) {
+			fail("bundle.version must be the number 2");
+		}
+		if (arguments.raw.version != 2) {
+			fail("unsupported agent bundle version '" & toString(arguments.raw.version) & "'; expected 2");
+		}
+
+		var identity = section(arguments.raw, "identity", "bundle.identity", true);
+		validateKeys(identity, "name", "bundle.identity");
+		if (!structKeyExists(identity, "name") || (isStringValue(identity.name) && trim(identity.name) == "")) {
+			fail("bundle.identity.name is required");
+		}
+		if (!isStringValue(identity.name)) {
+			fail("bundle.identity.name must be a string");
+		}
+		validateHostLabel(identity.name, "bundle.identity.name contains unsupported characters");
+
+		var compute = section(arguments.raw, "compute", "bundle.compute", false);
+		validateKeys(compute, "provider,region,size", "bundle.compute");
+		validateOptionalString(compute, "provider", "bundle.compute.provider");
+		validateOptionalString(compute, "region", "bundle.compute.region");
+		validateOptionalString(compute, "size", "bundle.compute.size");
+		validateOptionalEnum(compute, "provider", "digitalocean", "bundle.compute.provider must be 'digitalocean'");
+
+		var state = section(arguments.raw, "state", "bundle.state", false);
+		validateKeys(state, "strategy,size", "bundle.state");
+		validateOptionalString(state, "strategy", "bundle.state.strategy");
+		validateOptionalString(state, "size", "bundle.state.size");
+		validateOptionalEnum(state, "strategy", "provider-volume", "bundle.state.strategy must be 'provider-volume'");
+
+		var access = section(arguments.raw, "access", "bundle.access", false);
+		validateKeys(access, "method,hostname", "bundle.access");
+		validateOptionalString(access, "method", "bundle.access.method");
+		validateOptionalString(access, "hostname", "bundle.access.hostname");
+		validateOptionalEnum(access, "method", "openssh-over-tailscale", "bundle.access.method must be 'openssh-over-tailscale'");
+
+		var runtime = section(arguments.raw, "runtime", "bundle.runtime", false);
+		validateKeys(runtime, "image", "bundle.runtime");
+		validateOptionalString(runtime, "image", "bundle.runtime.image");
+
+		var hermes = section(arguments.raw, "hermes", "bundle.hermes", false);
+		validateKeys(hermes, "initial", "bundle.hermes");
+		var initial = section(hermes, "initial", "bundle.hermes.initial", false);
+		validateKeys(initial, "dashboardUsername", "bundle.hermes.initial");
+		validateOptionalString(initial, "dashboardUsername", "bundle.hermes.initial.dashboardUsername");
+
+		var secrets = section(arguments.raw, "secrets", "bundle.secrets", false);
+		validateKeys(secrets, "sshPrivateKey,tailscaleAuthKey,registryToken,hermes", "bundle.secrets");
+		validateOptionalString(secrets, "sshPrivateKey", "bundle.secrets.sshPrivateKey");
+		validateOptionalString(secrets, "tailscaleAuthKey", "bundle.secrets.tailscaleAuthKey");
+		validateOptionalString(secrets, "registryToken", "bundle.secrets.registryToken");
+		var hermesSecrets = section(secrets, "hermes", "bundle.secrets.hermes", false);
+		validateKeys(hermesSecrets, "apiServerKey,dashboardPassword,dashboardSecret", "bundle.secrets.hermes");
+		validateOptionalString(hermesSecrets, "apiServerKey", "bundle.secrets.hermes.apiServerKey");
+		validateOptionalString(hermesSecrets, "dashboardPassword", "bundle.secrets.hermes.dashboardPassword");
+		validateOptionalString(hermesSecrets, "dashboardSecret", "bundle.secrets.hermes.dashboardSecret");
+
+		if (structKeyExists(arguments.raw, "sops") && !isStruct(arguments.raw.sops)) {
+			fail("bundle.sops must be a mapping");
+		}
+		if (arguments.validateSecretValues) {
+			validateSecretsContent(secrets, hermesSecrets);
+		}
+	}
+
+	private function validateSecretsContent(required struct secrets, required struct hermesSecrets) {
+		if (hasValue(arguments.secrets, "tailscaleAuthKey")) {
+			validatePattern(arguments.secrets.tailscaleAuthKey, "^tskey-auth-[A-Za-z0-9_-]+$", "bundle.secrets.tailscaleAuthKey has an unsupported format");
+		}
+		if (hasValue(arguments.secrets, "sshPrivateKey")) {
+			var key = arguments.secrets.sshPrivateKey;
+			if (find("-----BEGIN ", key) != 1 || find("PRIVATE KEY-----", key) == 0 || find("-----END ", key) == 0) {
+				fail("bundle.secrets.sshPrivateKey is not a supported private key");
+			}
+		}
+		for (var keyName in [ "registryToken" ]) {
+			validateSecretLine(arguments.secrets, keyName, "bundle.secrets." & keyName);
+		}
+		for (var keyName in [ "apiServerKey", "dashboardPassword", "dashboardSecret" ]) {
+			validateSecretLine(arguments.hermesSecrets, keyName, "bundle.secrets.hermes." & keyName);
+		}
+	}
+
+	private function validateEffective(required struct values) {
+		validatePattern(arguments.values.region.value, "^[a-z0-9][a-z0-9-]*$", "effective region contains unsupported characters");
+		validatePattern(arguments.values.computeSize.value, "^[a-z0-9][a-z0-9-]*$", "effective compute size contains unsupported characters");
+		validateHostLabel(arguments.values.hostname.value, "effective hostname contains unsupported characters");
+		validatePattern(arguments.values.stateSize.value, "^[1-9][0-9]*GiB$", "effective working-state size must use the form 10GiB");
+		validatePattern(arguments.values.dashboardUsername.value, "^[A-Za-z0-9._@-]+$", "effective dashboard username contains unsupported characters");
+		validateRuntimeImage(arguments.values.runtimeImage.value);
+	}
+
+	private function parseYaml(required string content, required string errorMessage) {
+		var parsed = {};
+		try {
+			parsed = deserializeYAML(arguments.content);
+		} catch (nativeYamlError) {
+			try {
+				// The JVM test runtime supplies the official bx-yaml module; MatchBox has deserializeYAML built in.
+				parsed = yamlDeserialize(arguments.content);
+			} catch (yamlError) {
+				fail(arguments.errorMessage);
+			}
+		}
+		if (!isStruct(parsed)) {
+			fail(arguments.errorMessage);
+		}
+		return parsed;
+	}
+
+	private function assertReadable(required struct document) {
+		for (var key in structKeyArray(arguments.document)) {
+			if (key != "secrets" && key != "sops") {
+				assertReadableValue(arguments.document[key], "bundle." & key);
+			}
+		}
+	}
+
+	private function assertReadableValue(required any value, required string path) {
+		if (isStruct(arguments.value)) {
+			for (var key in structKeyArray(arguments.value)) {
+				assertReadableValue(arguments.value[key], arguments.path & "." & key);
+			}
+			return;
+		}
+		if (isArray(arguments.value)) {
+			for (var index = 1; index <= arrayLen(arguments.value); index++) {
+				assertReadableValue(arguments.value[index], arguments.path & "[" & index & "]");
+			}
+			return;
+		}
+		if (isStringValue(arguments.value) && left(trim(arguments.value), 4) == "ENC[") {
+			fail(arguments.path & " must remain readable; only bundle.secrets may be encrypted");
+		}
+	}
+
+	private function assertSecretProtection(required struct secrets, required boolean encrypted) {
+		for (var key in structKeyArray(arguments.secrets)) {
+			var value = arguments.secrets[key];
+			if (isStruct(value)) {
+				assertSecretProtection(value, arguments.encrypted);
+			} else if (isStringValue(value) && trim(value) != "") {
+				if (!arguments.encrypted || left(trim(value), 4) != "ENC[") {
+					fail("bundle secret values must be SOPS-encrypted");
+				}
+			}
+		}
+	}
+
+	private function section(
+		required struct parent,
+		required string key,
+		required string path,
+		required boolean requiredSection
+	) {
+		if (!structKeyExists(arguments.parent, arguments.key)) {
+			if (arguments.requiredSection) {
+				fail(arguments.path & " is required");
+			}
+			return {};
+		}
+		if (!isStruct(arguments.parent[arguments.key])) {
+			fail(arguments.path & " must be a mapping");
+		}
+		return arguments.parent[arguments.key];
+	}
+
+	private function choose(
+		required struct bundleSection,
+		required string bundleKey,
+		required struct overrides,
+		required string overrideKey,
+		required string defaultValue
+	) {
+		if (arguments.overrideKey != "" && structKeyExists(arguments.overrides, arguments.overrideKey)) {
+			if (!isStringValue(arguments.overrides[arguments.overrideKey]) || trim(arguments.overrides[arguments.overrideKey]) == "") {
+				fail("CLI override '" & arguments.overrideKey & "' must be a non-empty string");
+			}
+			return sourced(trim(arguments.overrides[arguments.overrideKey]), "CLI argument");
+		}
+		if (
+			structKeyExists(arguments.bundleSection, arguments.bundleKey) &&
+			isStringValue(arguments.bundleSection[arguments.bundleKey]) &&
+			trim(arguments.bundleSection[arguments.bundleKey]) != ""
+		) {
+			return sourced(trim(arguments.bundleSection[arguments.bundleKey]), "bundle");
+		}
+		return sourced(arguments.defaultValue, "built-in default");
+	}
+
+	private function sourced(required string value, required string source) {
+		return { value : arguments.value, source : arguments.source };
+	}
+
+	private function formatValue(required string label, required struct setting) {
+		return "  " & arguments.label & ": " & arguments.setting.value & " [" & arguments.setting.source & "]";
+	}
+
+	private function secretStatus(required struct values, required string key, required boolean generated) {
+		if (!hasValue(arguments.values, arguments.key)) {
+			return "missing";
+		}
+		return arguments.generated ? "generated" : "configured";
+	}
+
+	private function archiveProvided(required struct overrides, required string key, required string optionName) {
+		if (!structKeyExists(arguments.overrides, arguments.key)) {
+			return false;
+		}
+		if (!isStringValue(arguments.overrides[arguments.key]) || trim(arguments.overrides[arguments.key]) == "") {
+			fail(arguments.optionName & " requires a non-empty path");
+		}
+		return true;
+	}
+
+	private function hasValue(required struct values, required string key) {
+		return structKeyExists(arguments.values, arguments.key) &&
+			isStringValue(arguments.values[arguments.key]) &&
+			trim(arguments.values[arguments.key]) != "";
+	}
+
+	private function isStringValue(required any value) {
+		if (isNull(arguments.value) || !isSimpleValue(arguments.value)) {
+			return false;
+		}
+		var encoded = jsonSerialize(arguments.value);
+		return len(encoded) >= 2 && left(encoded, 1) == char(34) && right(encoded, 1) == char(34);
+	}
+
+	private function validateOptionalString(required struct parent, required string key, required string path) {
+		if (structKeyExists(arguments.parent, arguments.key) && !isStringValue(arguments.parent[arguments.key])) {
+			fail(arguments.path & " must be a string");
+		}
+	}
+
+	private function validateOptionalEnum(
+		required struct parent,
+		required string key,
+		required string expected,
+		required string message
+	) {
+		if (
+			structKeyExists(arguments.parent, arguments.key) &&
+			trim(arguments.parent[arguments.key]) != "" &&
+			arguments.parent[arguments.key] != arguments.expected
+		) {
+			fail(arguments.message);
+		}
+	}
+
+	private function validateSecretLine(required struct parent, required string key, required string path) {
+		if (
+			hasValue(arguments.parent, arguments.key) &&
+			(find(char(10), arguments.parent[arguments.key]) > 0 || find(char(13), arguments.parent[arguments.key]) > 0)
+		) {
+			fail(arguments.path & " must not contain newlines");
+		}
+	}
+
+	private function validateHostLabel(required string value, required string message) {
+		if (
+			len(arguments.value) > 63 ||
+			right(arguments.value, 1) == "-" ||
+			arrayLen(reMatch("^[a-z0-9][a-z0-9-]*$", arguments.value)) == 0
+		) {
+			fail(arguments.message);
+		}
+	}
+
+	private function validateRuntimeImage(required string image) {
+		var digestMarker = find("@sha256:", arguments.image);
+		var valid = false;
+		if (digestMarker > 1) {
+			var imageName = left(arguments.image, digestMarker - 1);
+			var digest = removeChars(arguments.image, 1, digestMarker + 7);
+			valid = arrayLen(reMatch("^[A-Za-z0-9._/-]+$", imageName)) > 0 &&
+				len(digest) == 64 &&
+				arrayLen(reMatch("^[A-Fa-f0-9]+$", digest)) > 0;
+		} else {
+			valid = arrayLen(reMatch("^[A-Za-z0-9._/-]+:[A-Za-z0-9._-]+$", arguments.image)) > 0 &&
+				right(lCase(arguments.image), 7) != ":latest";
+		}
+		if (!valid) {
+			fail("effective runtime image must include a non-latest tag or sha256 digest");
+		}
+	}
+
+	private function validatePattern(required string value, required string pattern, required string message) {
+		if (arrayLen(reMatch(arguments.pattern, arguments.value)) == 0) {
+			fail(arguments.message);
+		}
+	}
+
+	private function validateKeys(required struct value, required string allowed, required string path) {
+		for (var key in structKeyArray(arguments.value)) {
+			if (listFindNoCase(arguments.allowed, key) == 0) {
+				fail(arguments.path & " contains unknown key '" & key & "'");
+			}
+		}
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}

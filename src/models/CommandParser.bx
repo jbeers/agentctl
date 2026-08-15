@@ -1,0 +1,77 @@
+class {
+
+	function parse(required struct cli) {
+		var positionals = arguments.cli.positionals;
+		var options = arguments.cli.options;
+
+		if (arrayLen(positionals) < 2) {
+			return invalid("a namespace and command are required");
+		}
+		if (positionals[1] != "agent") {
+			return invalid("unknown namespace '" & positionals[1] & "'");
+		}
+		if (positionals[2] != "inspect") {
+			return invalid("unknown agent command '" & positionals[2] & "'");
+		}
+		if (arrayLen(positionals) > 2) {
+			return invalid("agent inspect received too many positional arguments");
+		}
+
+		var allowed = "file,region,size,hostname,runtime-image,state-archive,workspace-archive,verbose";
+		for (var optionName in structKeyArray(options)) {
+			if (listFindNoCase(allowed, optionName) == 0) {
+				return invalid("unknown option '--" & optionName & "'");
+			}
+			if (optionName == "verbose") {
+				if (!isBoolean(options[optionName]) || !options[optionName]) {
+					return invalid("option '--verbose' does not accept a value");
+				}
+			} else if (!isStringValue(options[optionName]) || trim(options[optionName]) == "") {
+				return invalid("option '--" & optionName & "' requires a value");
+			}
+		}
+		if (!structKeyExists(options, "file")) {
+			return invalid("agent inspect requires '--file'");
+		}
+
+		var result = {
+			valid : true,
+			namespace : "agent",
+			action : "inspect",
+			file : trim(options.file),
+			verbose : structKeyExists(options, "verbose"),
+			overrides : {}
+		};
+		copyOption(options, "region", result.overrides, "region");
+		copyOption(options, "size", result.overrides, "size");
+		copyOption(options, "hostname", result.overrides, "hostname");
+		copyOption(options, "runtime-image", result.overrides, "runtimeImage");
+		copyOption(options, "state-archive", result.overrides, "stateArchive");
+		copyOption(options, "workspace-archive", result.overrides, "workspaceArchive");
+		return result;
+	}
+
+	private function copyOption(
+		required struct options,
+		required string optionName,
+		required struct target,
+		required string targetName
+	) {
+		if (structKeyExists(arguments.options, arguments.optionName)) {
+			arguments.target[arguments.targetName] = trim(arguments.options[arguments.optionName]);
+		}
+	}
+
+	private function isStringValue(required any value) {
+		if (isNull(arguments.value) || !isSimpleValue(arguments.value)) {
+			return false;
+		}
+		var encoded = jsonSerialize(arguments.value);
+		return len(encoded) >= 2 && left(encoded, 1) == char(34) && right(encoded, 1) == char(34);
+	}
+
+	private function invalid(required string message) {
+		return { valid : false, error : arguments.message };
+	}
+
+}

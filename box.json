@@ -1,0 +1,19 @@
+{
+    "name": "agentctl",
+    "version": "2.0.0",
+    "slug": "agentctl",
+    "type": "app",
+    "language": "BoxLang",
+    "devDependencies": {
+        "bx-yaml": "1.0.0+2",
+        "testbox": "7.0.0+19"
+    },
+    "scripts": {
+        "build": "!./scripts/build-agentctl",
+        "test": "!BOXLANG_HOME=\"$PWD/.boxlang\" ./testbox/run --envfile=/dev/null --directory=tests.specs"
+    },
+    "installPaths": {
+        "bx-yaml": ".boxlang/modules/bx-yaml/",
+        "testbox": "testbox/"
+    }
+}

@@ -1,0 +1,8 @@
+version: 2
+identity:
+  name: sample-agent
+compute:
+  region: sfo3
+runtime:
+  image: ghcr.io/example/hermes:sha-0123456
+secrets: {}

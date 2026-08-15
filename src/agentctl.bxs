@@ -1,0 +1,54 @@
+import src.models.CommandParser;
+import src.services.BundleService;
+import src.services.CommandRunner;
+
+function usage(boolean errorStream = false) {
+	var lines = [
+		"agentctl",
+		"",
+		"Usage:",
+		"  agentctl agent inspect --file <bundle> [options]",
+		"",
+		"Options:",
+		"  --region <region>",
+		"  --size <droplet-size>",
+		"  --hostname <tailscale-hostname>",
+		"  --runtime-image <image:tag>",
+		"  --state-archive <path>       Per invocation; never stored in the bundle",
+		"  --workspace-archive <path>   Per invocation; never stored in the bundle",
+		"  --verbose",
+		"",
+		"Bundle selection is always explicit; agentctl does not scan the current directory."
+	];
+	for (var line in lines) {
+		systemOutput(line, true, arguments.errorStream);
+	}
+}
+
+cli = cliGetArgs();
+if (structKeyExists(cli.options, "help") || structKeyExists(cli.options, "h")) {
+	usage();
+	exit(0);
+}
+
+command = new CommandParser().parse(cli);
+if (!command.valid) {
+	systemOutput("agentctl: " & command.error, true, true);
+	systemOutput("", true, true);
+	usage(true);
+	exit(2);
+}
+
+try {
+	service = new BundleService(new CommandRunner());
+	plan = service.resolve(command.file, command.overrides);
+	if (command.verbose) {
+		systemOutput("agent inspect: validated explicit " & (plan.encrypted ? "SOPS-encrypted" : "plaintext") & " bundle", true, true);
+	}
+	systemOutput(service.formatInspection(plan), true);
+	exit(0);
+} catch (error) {
+	message = structKeyExists(error, "message") ? error.message : "inspection failed";
+	systemOutput("agentctl: " & message, true, true);
+	exit(1);
+}

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+local_matchbox="$HOME/dev/ortus-boxlang/matchbox/target/release/matchbox"
+if [[ -n ${MATCHBOX_BIN:-} ]]; then
+  matchbox_bin=$MATCHBOX_BIN
+elif [[ -x $local_matchbox ]]; then
+  matchbox_bin=$local_matchbox
+else
+  matchbox_bin=matchbox
+fi
+
+mkdir -p "$project_root/bin"
+"$matchbox_bin" --target native \
+  --output "$project_root/bin/agentctl" \
+  "$project_root/src/agentctl.bxs"

@@ -1,0 +1,73 @@
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("CommandParser", () => {
+			beforeEach(() => {
+				variables.parser = new src.models.CommandParser();
+			});
+
+			it("parses inspect with an explicit bundle", () => {
+				var result = parser.parse({
+					positionals : [ "agent", "inspect" ],
+					options : { file : "agents/sample.agent.yml" }
+				});
+
+				expect(result.valid).toBeTrue();
+				expect(result.action).toBe("inspect");
+				expect(result.file).toBe("agents/sample.agent.yml");
+			});
+
+			it("requires explicit bundle selection", () => {
+				var result = parser.parse({
+					positionals : [ "agent", "inspect" ],
+					options : {}
+				});
+
+				expect(result.valid).toBeFalse();
+				expect(result.error).toBe("agent inspect requires '--file'");
+			});
+
+			it("captures supported CLI overrides and archive intent", () => {
+				var result = parser.parse({
+					positionals : [ "agent", "inspect" ],
+					options : {
+						file : "agent.yml",
+						region : "fra1",
+						size : "s-2vcpu-4gb",
+						hostname : "cli-agent",
+						"runtime-image" : "ghcr.io/example/hermes:sha-cli",
+						"state-archive" : "state.tar",
+						"workspace-archive" : "workspace.tar",
+						verbose : true
+					}
+				});
+
+				expect(result.valid).toBeTrue();
+				expect(result.overrides.region).toBe("fra1");
+				expect(result.overrides.runtimeImage).toBe("ghcr.io/example/hermes:sha-cli");
+				expect(result.overrides.stateArchive).toBe("state.tar");
+				expect(result.verbose).toBeTrue();
+			});
+
+			it("rejects unknown commands, options, values, and extra arguments", () => {
+				expect(parser.parse({
+					positionals : [ "agent", "status" ],
+					options : { file : "agent.yml" }
+				}).valid).toBeFalse();
+				expect(parser.parse({
+					positionals : [ "agent", "inspect" ],
+					options : { file : "agent.yml", nmae : "typo" }
+				}).error).toBe("unknown option '--nmae'");
+				expect(parser.parse({
+					positionals : [ "agent", "inspect" ],
+					options : { file : true }
+				}).error).toBe("option '--file' requires a value");
+				expect(parser.parse({
+					positionals : [ "agent", "inspect", "agent.yml" ],
+					options : { file : "agent.yml" }
+				}).error).toBe("agent inspect received too many positional arguments");
+			});
+		});
+	}
+
+}

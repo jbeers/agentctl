@@ -1,0 +1,40 @@
+class {
+
+	function run(
+		required string executable,
+		array commandArguments = [],
+		numeric timeout = 0,
+		boolean terminateOnTimeout = false,
+		any directory = null,
+		any output = null,
+		any error = null,
+		boolean inheritEnvironment = true,
+		struct environment = {},
+		boolean inheritIO = false,
+		any input = null
+	) {
+		return systemExecute(
+			arguments.executable,
+			arguments.commandArguments,
+			arguments.timeout,
+			arguments.terminateOnTimeout,
+			arguments.directory,
+			arguments.output,
+			arguments.error,
+			arguments.inheritEnvironment,
+			arguments.environment,
+			arguments.inheritIO,
+			arguments.input
+		);
+	}
+
+	function isAvailable(required string executable) {
+		try {
+			run(arguments.executable, [ "--version" ], 5, true);
+			return true;
+		} catch (error) {
+			return false;
+		}
+	}
+
+}
