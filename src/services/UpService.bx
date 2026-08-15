@@ -90,6 +90,7 @@ class {
 			"  Volume " & arguments.result.volumeName & " (" & arguments.result.volumeId & "): " & (arguments.result.volumeCreated ? "created" : "reused"),
 			"  Host enrollment: " & (arguments.result.dropletCreated ? "completed" : "reused"),
 			"  Runtime reconciliation: completed",
+			"  Workspace/Compose contract: verified",
 			"  Hermes gateway: healthy at http://" & arguments.result.hostname & ":8642/health"
 		];
 		if (arguments.result.verbose) {
@@ -226,17 +227,27 @@ class {
 			'for required_key in API_SERVER_KEY HERMES_DASHBOARD_BASIC_AUTH_USERNAME HERMES_DASHBOARD_BASIC_AUTH_PASSWORD HERMES_DASHBOARD_BASIC_AUTH_SECRET; do',
 			'  grep -q "^${required_key}=." "$env_file" || { printf ''agentctl runtime: required Hermes setting is missing\n'' >&2; exit 1; }',
 			'done',
-			'install -d -m 0755 /etc/agentctl',
+			'install -d -m 0755 /etc/agentctl /etc/agentctl/hermes-managed',
 			'launcher_tmp=$(mktemp /etc/agentctl/hermes-launcher.XXXXXX)',
 			'cat > "$launcher_tmp" <<''EOF''',
 			'API_SERVER_ENABLED=true',
 			'API_SERVER_HOST=0.0.0.0',
 			'HERMES_DASHBOARD=1',
+			'HERMES_MANAGED_DIR=/etc/hermes',
+			'HERMES_WRITE_SAFE_ROOT=/opt/data:/workdir',
 			'CONTAINER_HOST=unix:///run/podman/podman.sock',
 			'DOCKER_HOST=unix:///run/podman/podman.sock',
 			'EOF',
 			'chmod 0644 "$launcher_tmp"',
 			'mv "$launcher_tmp" /etc/agentctl/hermes-launcher.env',
+			'managed_tmp=$(mktemp /etc/agentctl/hermes-managed/config.XXXXXX)',
+			'cat > "$managed_tmp" <<''EOF''',
+			'terminal:',
+			'  backend: local',
+			'  cwd: /workdir',
+			'EOF',
+			'chmod 0644 "$managed_tmp"',
+			'mv "$managed_tmp" /etc/agentctl/hermes-managed/config.yaml',
 			'chown -R "$agent_uid:$agent_gid" "$mount_dir" /workdir',
 			'podman_as_agent unshare chown -R 10000:10000 "$mount_dir" /workdir',
 			'tailscale_ip=$(tailscale ip -4)',
@@ -248,10 +259,11 @@ class {
 			'fi',
 			'unset registry_token',
 			'podman_as_agent pull "$hermes_image"',
+			'podman_as_agent run --rm --entrypoint /bin/sh "$hermes_image" -c ''command -v podman-compose >/dev/null && podman-compose --version >/dev/null'' || { printf ''agentctl runtime: selected image lacks the required podman-compose client\n'' >&2; exit 1; }',
 			'if podman_as_agent container inspect hermes >/dev/null 2>&1; then',
 			'  podman_as_agent rm --force hermes',
 			'fi',
-			'podman_as_agent run --detach --name hermes --restart unless-stopped --security-opt label=disable --shm-size 1g --log-opt max-size=10m --log-opt max-file=3 --env-file /etc/agentctl/hermes-launcher.env --publish "$tailscale_ip:8642:8642" --publish "$tailscale_ip:9119:9119" --volume "$agent_socket:/run/podman/podman.sock" --volume "$mount_dir:/opt/data" --volume /workdir:/workdir "$hermes_image" gateway run',
+			'podman_as_agent run --detach --name hermes --restart unless-stopped --security-opt label=disable --shm-size 1g --log-opt max-size=10m --log-opt max-file=3 --workdir /workdir --env-file /etc/agentctl/hermes-launcher.env --publish "$tailscale_ip:8642:8642" --publish "$tailscale_ip:9119:9119" --volume "$agent_socket:/run/podman/podman.sock" --volume "$mount_dir:/opt/data" --volume /workdir:/workdir --volume /etc/agentctl/hermes-managed:/etc/hermes:ro "$hermes_image" gateway run',
 			'gateway_ready=false',
 			'for ((attempt = 1; attempt <= 60; attempt++)); do',
 			'  podman_as_agent exec hermes hermes gateway start >/dev/null 2>&1 || true',
@@ -262,7 +274,9 @@ class {
 			'  sleep 2',
 			'done',
 			'[[ $gateway_ready == true ]] || { printf ''agentctl runtime: Hermes gateway did not become ready\n'' >&2; exit 1; }',
-			'printf ''Hermes gateway is healthy\n'''
+			'[[ $(podman_as_agent exec hermes hermes config get terminal.cwd) == /workdir ]] || { printf ''agentctl runtime: Hermes terminal working directory is not /workdir\n'' >&2; exit 1; }',
+			'podman_as_agent exec hermes /bin/sh -c ''test "$PWD" = /workdir && test "$HERMES_WRITE_SAFE_ROOT" = /opt/data:/workdir && test "$CONTAINER_HOST" = unix:///run/podman/podman.sock && test "$DOCKER_HOST" = unix:///run/podman/podman.sock && test -S /run/podman/podman.sock && command -v podman-compose >/dev/null'' || { printf ''agentctl runtime: Hermes workspace/Compose contract is not satisfied\n'' >&2; exit 1; }',
+			'printf ''Hermes gateway and workspace/Compose contract are healthy\n'''
 		]);
 	}
 

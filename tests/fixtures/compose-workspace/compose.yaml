@@ -1,0 +1,20 @@
+services:
+  workspace-probe:
+    image: docker.io/library/busybox@sha256:b7f3d86d6e84fc17718c48bcde1450807faa2d56704205c697b4bd5df7b9e29f
+    working_dir: /workspace
+    security_opt:
+      - label=disable
+    command: ["sh", "-c", "test \"$(cat known.txt)\" = agentctl-compose-ok && httpd -f -p 18080"]
+    volumes:
+      - ${COMPOSE_WORKSPACE_PATH:-.}:/workspace:ro
+      - scratch:/scratch
+    ports:
+      - "18080:18080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:18080/known.txt"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  scratch: {}

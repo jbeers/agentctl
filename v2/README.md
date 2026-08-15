@@ -11,7 +11,7 @@ These are intentionally vertical slices: each produces a user-visible, testable 
 | 001 | [Inspect a readable v2 agent bundle](issues/001-inspect-readable-v2-bundle.md) | AFK | Complete | None |
 | 002 | [Initialize a portable v2 agent bundle](issues/002-initialize-portable-v2-bundle.md) | AFK | Complete | 001 |
 | 003 | [Bring up a private v2 agent](issues/003-bring-up-private-v2-agent.md) | AFK | Complete | 001, 002 |
-| 004 | [Run Compose from a writable workspace](issues/004-run-compose-from-writable-workdir.md) | AFK | Pending | 003 |
+| 004 | [Run Compose from a writable workspace](issues/004-run-compose-from-writable-workdir.md) | AFK | Complete | 003 |
 | 005 | [Restore a Hermes state archive during up](issues/005-restore-hermes-state-archive.md) | AFK | Pending | 003 |
 | 006 | [Seed a workspace archive during up](issues/006-seed-workspace-archive.md) | AFK | Pending | 005 |
 | 007 | [Access a running agent](issues/007-access-running-agent.md) | AFK | Pending | 003 |

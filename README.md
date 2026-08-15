@@ -39,4 +39,4 @@ The wizard asks for the agent name, target bundle, public settings, and age reci
 
 Initialization validates SOPS and local decryption before prompting for credentials, generates an agent-specific Ed25519 identity, and publishes the bundle atomically with mode `0600`. Inspection resolves a redacted plan. Doctor checks bundle credentials, local tools, the SSH identity, browser support, and read-only DigitalOcean authentication. `up` can create billable DigitalOcean resources and succeeds only after private SSH/Tailscale access and Hermes health are ready.
 
-See [Agent bundles and inspection](docs/agent-bundles.md), [Bring up an agent](docs/agent-up.md), and [Take an agent down safely](docs/agent-down.md).
+See [Agent bundles and inspection](docs/agent-bundles.md), [Bring up an agent](docs/agent-up.md), [Workspace and Compose](docs/compose-workspace.md), and [Take an agent down safely](docs/agent-down.md).

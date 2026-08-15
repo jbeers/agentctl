@@ -15,21 +15,27 @@ The official Hermes image limits file-tool writes to `/opt/data` by default. The
 
 ## Acceptance criteria
 
-- [ ] Host and Hermes both expose the workspace at the exact absolute path `/workdir`.
-- [ ] `/workdir` is writable by Hermes' runtime UID through terminal commands, `write_file`, and `patch`.
-- [ ] The launcher explicitly sets Hermes safe write roots to `/opt/data` and `/workdir` while retaining Hermes' protected credential-path denylist.
-- [ ] The launcher reconciles Hermes' canonical local terminal working directory to `/workdir`, including after restored or older persistent state.
-- [ ] The container process working directory is `/workdir`.
-- [ ] The runtime image contains a documented and tested Compose-compatible command.
-- [ ] Hermes receives only the rootless `agent` Podman socket; no nested daemon, rootful socket, `--privileged`, host-root mount, or broad sudo access is added.
-- [ ] `DOCKER_HOST` and `CONTAINER_HOST` target the mounted rootless socket.
-- [ ] A representative Compose fixture started from Hermes creates sibling containers successfully.
-- [ ] A sibling bind mount using a relative project path can read a known file from the host `/workdir`.
-- [ ] Hermes can reach a sibling's published health endpoint through `host.containers.internal`.
-- [ ] The operator can reach the same published endpoint through Tailscale MagicDNS.
-- [ ] The endpoint remains unreachable through the Droplet's public IPv4 address under the managed firewall.
-- [ ] Compose project volumes are documented as disposable and are not moved into Hermes' persistent state implicitly.
-- [ ] Automated tests verify launcher arguments, safe-root configuration, terminal cwd reconciliation, path parity, and the Compose client contract without requiring a live Droplet.
+- [x] Host and Hermes both expose the workspace at the exact absolute path `/workdir`.
+- [x] `/workdir` is writable by Hermes' runtime UID through terminal commands, `write_file`, and `patch`.
+- [x] The launcher explicitly sets Hermes safe write roots to `/opt/data` and `/workdir` while retaining Hermes' protected credential-path denylist.
+- [x] The launcher reconciles Hermes' canonical local terminal working directory to `/workdir`, including after restored or older persistent state.
+- [x] The container process working directory is `/workdir`.
+- [x] The runtime image contains a documented and tested Compose-compatible command.
+- [x] Hermes receives only the rootless `agent` Podman socket; no nested daemon, rootful socket, `--privileged`, host-root mount, or broad sudo access is added.
+- [x] `DOCKER_HOST` and `CONTAINER_HOST` target the mounted rootless socket.
+- [x] A representative Compose fixture started from Hermes creates sibling containers successfully.
+- [x] A sibling bind mount using a relative project path can read a known file from the host `/workdir`.
+- [x] Hermes can reach a sibling's published health endpoint through `host.containers.internal`.
+- [x] The operator can reach the same published endpoint through Tailscale MagicDNS.
+- [x] The endpoint remains unreachable through the Droplet's public IPv4 address under the managed firewall.
+- [x] Compose project volumes are documented as disposable and are not moved into Hermes' persistent state implicitly.
+- [x] Automated tests verify launcher arguments, safe-root configuration, terminal cwd reconciliation, path parity, and the Compose client contract without requiring a live Droplet.
+
+## Verification
+
+- Automated launcher, image-contract, and fixture checks pass without a live Droplet.
+- A locally built runtime image passed terminal, `write_file`, `patch`, protected-path, managed-cwd, rootless-socket, Compose sibling, bind-mount, and `host.containers.internal` checks.
+- The managed firewall and Tailscale-only publication path are covered here structurally; deliberate live network evidence remains part of issue 010.
 
 ## Blocked by
 

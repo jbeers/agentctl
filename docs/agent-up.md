@@ -43,6 +43,8 @@ Multiple exact-name Droplets or volumes fail safely. A volume in another region,
 
 The persistent `.env` under Hermes state is seeded only when empty. Existing Hermes settings remain authoritative on later runs. Launcher-owned networking and container settings are reconciled separately on every `up`.
 
+Hermes starts in `/workdir`, and its canonical local terminal directory is pinned there through a read-only managed configuration layer. File and patch tools may write under `/opt/data` and `/workdir` while Hermes' protected credential-path denylist remains active. The selected runtime image must provide `podman-compose`; `up` verifies that contract before replacing the running Hermes container. See [Workspace and Compose](compose-workspace.md).
+
 ## Credential boundaries
 
 The Tailscale enrollment key is sent only through first-boot enrollment for a new Droplet. Use a short-lived, ephemeral, pre-approved key. It is not retransmitted when reconciling an existing Droplet.
