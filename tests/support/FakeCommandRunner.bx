@@ -1,9 +1,11 @@
 class {
 
-	function init(array responses = [], boolean available = true) {
+	function init(array responses = [], any available = true, any handler = null) {
 		variables.responses = arguments.responses;
 		variables.available = arguments.available;
+		variables.handler = arguments.handler;
 		variables.calls = [];
+		variables.availabilityChecks = [];
 		return this;
 	}
 
@@ -25,6 +27,9 @@ class {
 			arguments : arguments.commandArguments,
 			input : arguments.input
 		});
+		if (!isNull(variables.handler)) {
+			return variables.handler(arguments.executable, arguments.commandArguments, arguments.input);
+		}
 		if (arrayLen(variables.responses) > 0) {
 			var response = variables.responses[1];
 			arrayDeleteAt(variables.responses, 1);
@@ -34,11 +39,19 @@ class {
 	}
 
 	function isAvailable(required string executable) {
-		return variables.available;
+		arrayAppend(variables.availabilityChecks, arguments.executable);
+		if (isStruct(variables.available) && structKeyExists(variables.available, arguments.executable)) {
+			return variables.available[arguments.executable];
+		}
+		return isBoolean(variables.available) ? variables.available : true;
 	}
 
 	function getCalls() {
 		return variables.calls;
+	}
+
+	function getAvailabilityChecks() {
+		return variables.availabilityChecks;
 	}
 
 }

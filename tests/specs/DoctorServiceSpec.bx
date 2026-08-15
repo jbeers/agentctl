@@ -1,0 +1,115 @@
+import tests.support.FakeCommandRunner;
+
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("DoctorService", () => {
+			it("validates tools, provider authentication, decryption, required values, and the SSH identity", () => {
+				var handler = (executable, commandArguments, input) => {
+					if (arguments.executable == "sops") {
+						return { exitCode : 0, output : validBundle(), error : "", timeout : false };
+					}
+					return { exitCode : 0, output : "", error : "", timeout : false };
+				};
+				var runner = new FakeCommandRunner([], {}, handler);
+				var service = new src.services.DoctorService(runner, new src.services.BundleService(runner));
+				var result = service.check(fixture("encrypted.agent.yml"));
+				var output = service.format(result);
+
+				expect(result.healthy).toBeTrue();
+				expect(result.failures).toHaveLength(0);
+				expect(output).toBe("agent doctor: bundle and local prerequisites are healthy");
+				expect(runner.getAvailabilityChecks()).toInclude("doctl");
+				expect(runner.getAvailabilityChecks()).toInclude("sops");
+				expect(runner.getAvailabilityChecks()).toInclude("ssh");
+				expect(runner.getAvailabilityChecks()).toInclude("scp");
+				expect(runner.getAvailabilityChecks()).toInclude("ssh-keygen");
+				expect(runner.getAvailabilityChecks()).toInclude("xdg-open");
+
+				var commandNames = [];
+				for (var call in runner.getCalls()) {
+					arrayAppend(commandNames, call.executable);
+					expect(jsonSerialize(call.arguments)).notToInclude("test-private-material");
+					if (call.executable == "ssh-keygen") {
+						expect(fileExists(call.arguments[5])).toBeFalse();
+					}
+				}
+				expect(commandNames).toInclude("sops");
+				expect(commandNames).toInclude("doctl");
+				expect(commandNames).toInclude("ssh-keygen");
+				expect(commandNames).notToInclude("ssh");
+				expect(commandNames).notToInclude("scp");
+				expect(output).notToInclude("tskey-auth-");
+				expect(output).notToInclude("PRIVATE KEY");
+			});
+
+			it("categorizes prerequisite, bundle, and provider-authentication failures", () => {
+				var availability = {
+					doctl : true,
+					sops : true,
+					ssh : true,
+					scp : false,
+					"ssh-keygen" : true,
+					"xdg-open" : false,
+					open : false
+				};
+				var handler = (executable, commandArguments, input) => {
+					if (arguments.executable == "doctl") {
+						return { exitCode : 1, output : "", error : "provider-token-must-not-leak", timeout : false };
+					}
+					return { exitCode : 0, output : "", error : "", timeout : false };
+				};
+				var runner = new FakeCommandRunner([], availability, handler);
+				var service = new src.services.DoctorService(runner, new src.services.BundleService(runner));
+				var result = service.check(fixture("malformed.agent.yml"));
+				var output = service.format(result);
+
+				expect(result.healthy).toBeFalse();
+				expect(output).toInclude("prerequisite: scp is not installed or is not on PATH");
+				expect(output).toInclude("prerequisite: no supported browser launcher found");
+				expect(output).toInclude("bundle: agent bundle is not valid YAML");
+				expect(output).toInclude("provider authentication: DigitalOcean authentication failed");
+				expect(output).notToInclude("provider-token-must-not-leak");
+			});
+
+			it("reports missing required bundle credentials", () => {
+				var handler = (executable, commandArguments, input) => {
+					return { exitCode : 0, output : "", error : "", timeout : false };
+				};
+				var runner = new FakeCommandRunner([], {}, handler);
+				var service = new src.services.DoctorService(runner, new src.services.BundleService(runner));
+				var output = service.format(service.check(fixture("plaintext.agent.yml")));
+
+				expect(output).toInclude("bundle: SSH private key is missing");
+				expect(output).toInclude("bundle: Tailscale enrollment key is missing");
+				expect(output).toInclude("bundle: Hermes API key is missing");
+				expect(output).toInclude("bundle: Hermes dashboard password is missing");
+				expect(output).toInclude("bundle: Hermes dashboard signing secret is missing");
+			});
+		});
+	}
+
+	private function validBundle() {
+		return "version: 2" & char(10) &
+			"identity:" & char(10) &
+			"  name: encrypted-agent" & char(10) &
+			"runtime:" & char(10) &
+			"  image: ghcr.io/example/hermes:sha-test" & char(10) &
+			"secrets:" & char(10) &
+			"  sshPrivateKey: |" & char(10) &
+			"    -----BEGIN OPENSSH PRIVATE KEY-----" & char(10) &
+			"    test-private-material" & char(10) &
+			"    -----END OPENSSH PRIVATE KEY-----" & char(10) &
+			"  tailscaleAuthKey: tskey-auth-test_value" & char(10) &
+			"  registryToken: " & char(34) & char(34) & char(10) &
+			"  hermes:" & char(10) &
+			"    apiServerKey: test-api-key" & char(10) &
+			"    dashboardPassword: test-password" & char(10) &
+			"    dashboardSecret: test-dashboard-secret" & char(10);
+	}
+
+	private function fixture(required string name) {
+		return getCanonicalPath(getDirectoryFromPath(getCurrentTemplatePath()) & "../fixtures/" & arguments.name);
+	}
+
+}

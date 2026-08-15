@@ -1,0 +1,328 @@
+class {
+
+	function init(required any commandRunner, required any bundleService) {
+		variables.runner = arguments.commandRunner;
+		variables.bundles = arguments.bundleService;
+		return this;
+	}
+
+	function prepare(
+		required string name,
+		required string path,
+		struct values = {},
+		string ageRecipient = ""
+	) {
+		var target = targetPath(arguments.path);
+		refuseExisting(target);
+		if (!variables.runner.isAvailable("sops")) {
+			fail("sops is required to initialize an agent bundle");
+		}
+		if (!variables.runner.isAvailable("ssh-keygen")) {
+			fail("ssh-keygen is required to initialize an agent bundle");
+		}
+		if (find(char(10), arguments.ageRecipient) > 0 || find(char(13), arguments.ageRecipient) > 0) {
+			fail("age recipient must not contain newlines");
+		}
+
+		var raw = { version : 2, identity : { name : arguments.name } };
+		validateValueKeys(arguments.values);
+		if (hasValue(arguments.values, "region") || hasValue(arguments.values, "size")) {
+			raw.compute = {};
+			if (hasValue(arguments.values, "region")) raw.compute.region = arguments.values.region;
+			if (hasValue(arguments.values, "size")) raw.compute.size = arguments.values.size;
+		}
+		if (hasValue(arguments.values, "hostname")) {
+			raw.access = { hostname : arguments.values.hostname };
+		}
+		if (hasValue(arguments.values, "runtimeImage")) {
+			raw.runtime = { image : arguments.values.runtimeImage };
+		}
+		if (hasValue(arguments.values, "dashboardUsername")) {
+			raw.hermes = { initial : { dashboardUsername : arguments.values.dashboardUsername } };
+		}
+		var plan = variables.bundles.parse(raw);
+		var encryptArguments = [
+			"--encrypt",
+			"--input-type", "yaml",
+			"--output-type", "yaml",
+			"--filename-override", target
+		];
+		if (trim(arguments.ageRecipient) != "") {
+			arrayAppend(encryptArguments, "--age");
+			arrayAppend(encryptArguments, trim(arguments.ageRecipient));
+			arrayAppend(encryptArguments, "--encrypted-regex");
+			arrayAppend(encryptArguments, "^secrets$");
+		}
+		arrayAppend(encryptArguments, "/dev/stdin");
+
+		var validationEncryption = encryptBundle(initialContent(plan, true), encryptArguments);
+		validateEncryptedBase(validationEncryption, getDirectoryFromPath(target));
+		var encryptedContent = encryptBundle(initialContent(plan), encryptArguments);
+		return {
+			target : target,
+			plan : plan,
+			encryptedContent : encryptedContent
+		};
+	}
+
+	function create(
+		required struct prepared,
+		required string tailscaleAuthKey,
+		required string dashboardPassword,
+		string registryToken = ""
+	) {
+		refuseExisting(arguments.prepared.target);
+		validateTailscaleAuthKey(arguments.tailscaleAuthKey);
+		validateRequiredSecret(arguments.dashboardPassword, "dashboard password");
+		validateOptionalSecret(arguments.registryToken, "registry pull token");
+
+		var directory = getDirectoryFromPath(arguments.prepared.target);
+		var keyPath = createTempFile(directory, ".agentctl-ssh-", ".key");
+		fileDelete(keyPath);
+		var publicKeyPath = keyPath & ".pub";
+		var bundlePath = "";
+		try {
+			var keyResult = {};
+			try {
+				keyResult = variables.runner.run(
+					"ssh-keygen",
+					[ "-q", "-t", "ed25519", "-N", "", "-f", keyPath, "-C", "agentctl:" & arguments.prepared.plan.values.name.value ]
+				);
+			} catch (keyError) {
+				fail("generating the agent SSH identity failed");
+			}
+			if (!succeeded(keyResult) || !fileExists(keyPath) || directoryExists(keyPath)) {
+				fail("generating the agent SSH identity failed");
+			}
+			fileSetAccessMode(keyPath, "600");
+			if (fileExists(publicKeyPath)) fileSetAccessMode(publicKeyPath, "600");
+			var privateKey = fileRead(keyPath);
+			if (right(privateKey, 1) != char(10)) privateKey &= char(10);
+
+			bundlePath = createTempFile(directory, ".agentctl-bundle-", ".yml");
+			fileSetAccessMode(bundlePath, "600");
+			fileWrite(bundlePath, arguments.prepared.encryptedContent);
+			var secretValues = [
+				{ path : "secrets.sshPrivateKey", value : privateKey },
+				{ path : "secrets.tailscaleAuthKey", value : arguments.tailscaleAuthKey }
+			];
+			if (arguments.registryToken != "") {
+				arrayAppend(secretValues, { path : "secrets.registryToken", value : arguments.registryToken });
+			}
+			arrayAppend(secretValues, { path : "secrets.hermes.apiServerKey", value : generateCredential() });
+			arrayAppend(secretValues, { path : "secrets.hermes.dashboardPassword", value : arguments.dashboardPassword });
+			arrayAppend(secretValues, { path : "secrets.hermes.dashboardSecret", value : generateCredential() });
+			for (var secret in secretValues) {
+				setSecret(bundlePath, secret.path, secret.value);
+			}
+			fileSetAccessMode(bundlePath, "600");
+
+			var finalPlan = variables.bundles.resolve(bundlePath);
+			if (
+				finalPlan.secrets.sshPrivateKey == "missing" ||
+				finalPlan.secrets.tailscaleAuthKey == "missing" ||
+				finalPlan.secrets.apiServerKey == "missing" ||
+				finalPlan.secrets.dashboardPassword == "missing" ||
+				finalPlan.secrets.dashboardSecret == "missing" ||
+				(arguments.registryToken != "" && finalPlan.secrets.registryToken == "missing")
+			) {
+				fail("validating the initialized agent bundle failed");
+			}
+			publishExclusive(bundlePath, arguments.prepared.target);
+			bundlePath = "";
+			return arguments.prepared.target;
+		} finally {
+			deleteIfExists(bundlePath);
+			deleteIfExists(keyPath);
+			deleteIfExists(publicKeyPath);
+		}
+	}
+
+	function validateTailscaleAuthKey(required string value) {
+		validateRequiredSecret(arguments.value, "Tailscale enrollment key");
+		if (arrayLen(reMatch("^tskey-auth-[A-Za-z0-9_-]+$", arguments.value)) == 0) {
+			fail("Tailscale enrollment key has an unsupported format");
+		}
+		return true;
+	}
+
+	private function initialContent(required struct plan, boolean validationValues = false) {
+		var values = arguments.plan.values;
+		var sshPrivateKey = arguments.validationValues ?
+			"-----BEGIN OPENSSH PRIVATE KEY-----" & char(10) & "validation" & char(10) & "-----END OPENSSH PRIVATE KEY-----" & char(10) : "";
+		var tailscaleAuthKey = arguments.validationValues ? "tskey-auth-agentctl-validation" : "";
+		var validationSecret = arguments.validationValues ? "agentctl-validation" : "";
+		return "version: 2" & char(10) &
+			"identity:" & char(10) &
+			"  name: " & jsonSerialize(values.name.value) & char(10) &
+			"compute:" & char(10) &
+			"  provider: " & jsonSerialize(values.computeProvider.value) & char(10) &
+			"  region: " & jsonSerialize(values.region.value) & char(10) &
+			"  size: " & jsonSerialize(values.computeSize.value) & char(10) &
+			"state:" & char(10) &
+			"  strategy: " & jsonSerialize(values.stateStrategy.value) & char(10) &
+			"  size: " & jsonSerialize(values.stateSize.value) & char(10) &
+			"access:" & char(10) &
+			"  method: " & jsonSerialize(values.accessMethod.value) & char(10) &
+			"  hostname: " & jsonSerialize(values.hostname.value) & char(10) &
+			"runtime:" & char(10) &
+			"  image: " & jsonSerialize(values.runtimeImage.value) & char(10) &
+			"hermes:" & char(10) &
+			"  initial:" & char(10) &
+			"    dashboardUsername: " & jsonSerialize(values.dashboardUsername.value) & char(10) &
+			"secrets:" & char(10) &
+			"  sshPrivateKey: " & jsonSerialize(sshPrivateKey) & char(10) &
+			"  tailscaleAuthKey: " & jsonSerialize(tailscaleAuthKey) & char(10) &
+			"  registryToken: " & jsonSerialize(validationSecret) & char(10) &
+			"  hermes:" & char(10) &
+			"    apiServerKey: " & jsonSerialize(validationSecret) & char(10) &
+			"    dashboardPassword: " & jsonSerialize(validationSecret) & char(10) &
+			"    dashboardSecret: " & jsonSerialize(validationSecret) & char(10);
+	}
+
+	private function encryptBundle(required string content, required array encryptArguments) {
+		var encrypted = {};
+		try {
+			encrypted = variables.runner.run(
+				"sops",
+				arguments.encryptArguments,
+				0, false, null, null, null, true, {}, false, arguments.content
+			);
+		} catch (error) {
+			fail("could not encrypt the agent bundle; check SOPS/age configuration");
+		}
+		if (!succeeded(encrypted) || !structKeyExists(encrypted, "output") || isNull(encrypted.output) || encrypted.output == "") {
+			fail("could not encrypt the agent bundle; check SOPS/age configuration");
+		}
+		return encrypted.output;
+	}
+
+	private function validateEncryptedBase(required string encryptedContent, required string directory) {
+		var path = createTempFile(arguments.directory, ".agentctl-encryption-check-", ".yml");
+		try {
+			fileSetAccessMode(path, "600");
+			fileWrite(path, arguments.encryptedContent);
+			try {
+				variables.bundles.resolve(path);
+			} catch (error) {
+				fail("SOPS configuration must encrypt only the secrets subtree and allow local decryption");
+			}
+		} finally {
+			deleteIfExists(path);
+		}
+	}
+
+	private function setSecret(required string bundlePath, required string keyPath, required string value) {
+		var result = {};
+		try {
+			result = variables.runner.run(
+				"sops",
+				[ "set", "--value-stdin", arguments.bundlePath, sopsPath(arguments.keyPath) ],
+				0, false, null, null, null, true, {}, false, jsonSerialize(arguments.value)
+			);
+		} catch (error) {
+			fail("setting encrypted bundle secret failed");
+		}
+		if (!succeeded(result)) {
+			fail("setting encrypted bundle secret failed");
+		}
+	}
+
+	private function sopsPath(required string keyPath) {
+		var result = "";
+		for (var segment in listToArray(arguments.keyPath, ".", false, true)) {
+			result &= "[" & char(34) & segment & char(34) & "]";
+		}
+		return result;
+	}
+
+	private function publishExclusive(required string source, required string target) {
+		try {
+			filePublishExclusive(arguments.source, arguments.target);
+			return;
+		} catch (nativePublishError) {
+			var result = {};
+			try {
+				result = variables.runner.run("ln", [ arguments.source, arguments.target ]);
+			} catch (publishError) {
+				fail("refusing to overwrite existing agent bundle '" & arguments.target & "'");
+			}
+			if (!succeeded(result) || !fileExists(arguments.target)) {
+				fail("refusing to overwrite existing agent bundle '" & arguments.target & "'");
+			}
+			try {
+				fileDelete(arguments.source);
+			} catch (cleanupError) {
+				deleteIfExists(arguments.target);
+				fail("publishing the agent bundle failed during cleanup");
+			}
+		}
+	}
+
+	private function targetPath(required string path) {
+		var normalized = replace(arguments.path, "\", "/", "all");
+		var parts = listToArray(normalized, "/", false, true);
+		if (arrayLen(parts) == 0) {
+			fail("agent bundle path is required");
+		}
+		var fileName = parts[arrayLen(parts)];
+		var directory = find("/", normalized) == 0 ? "." : getDirectoryFromPath(arguments.path);
+		if (!directoryExists(directory)) {
+			fail("agent bundle directory '" & directory & "' does not exist");
+		}
+		var canonicalDirectory = getCanonicalPath(directory);
+		return canonicalDirectory & (right(canonicalDirectory, 1) == "/" ? "" : "/") & fileName;
+	}
+
+	private function refuseExisting(required string target) {
+		if (fileExists(arguments.target) || directoryExists(arguments.target)) {
+			fail("refusing to overwrite existing agent bundle '" & arguments.target & "'");
+		}
+	}
+
+	private function validateValueKeys(required struct values) {
+		for (var key in structKeyArray(arguments.values)) {
+			if (listFindNoCase("region,size,hostname,runtimeImage,dashboardUsername", key) == 0) {
+				fail("unknown initialization value '" & key & "'");
+			}
+		}
+	}
+
+	private function hasValue(required struct values, required string key) {
+		return structKeyExists(arguments.values, arguments.key) && trim(toString(arguments.values[arguments.key])) != "";
+	}
+
+	private function validateRequiredSecret(required string value, required string label) {
+		if (arguments.value == "" || find(char(10), arguments.value) > 0 || find(char(13), arguments.value) > 0) {
+			fail(arguments.label & " must not be empty or contain newlines");
+		}
+	}
+
+	private function validateOptionalSecret(required string value, required string label) {
+		if (find(char(10), arguments.value) > 0 || find(char(13), arguments.value) > 0) {
+			fail(arguments.label & " must not contain newlines");
+		}
+	}
+
+	private function generateCredential() {
+		return lCase(hash(generateSecretKey("AES", 256), "SHA-256"));
+	}
+
+	private function succeeded(required struct result) {
+		return structKeyExists(arguments.result, "exitCode") &&
+			!isNull(arguments.result.exitCode) &&
+			arguments.result.exitCode == 0 &&
+			(!structKeyExists(arguments.result, "timeout") || !arguments.result.timeout);
+	}
+
+	private function deleteIfExists(string path = "") {
+		if (arguments.path != "" && fileExists(arguments.path) && !directoryExists(arguments.path)) {
+			fileDelete(arguments.path);
+		}
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}

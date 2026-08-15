@@ -27,6 +27,68 @@ class extends="testbox.system.BaseSpec" {
 				expect(result.error).toBe("agent inspect requires '--file'");
 			});
 
+			it("starts the init wizard only when no options are supplied", () => {
+				var result = parser.parse({
+					positionals : [ "agent", "init" ],
+					options : {}
+				});
+
+				expect(result.valid).toBeTrue();
+				expect(result.action).toBe("init");
+				expect(result.wizard).toBeTrue();
+				expect(parser.parse({
+					positionals : [ "agent", "init" ],
+					options : { verbose : true }
+				}).error).toBe("agent init requires '--file'");
+			});
+
+			it("parses init with explicit identity, target, and public choices", () => {
+				var result = parser.parse({
+					positionals : [ "agent", "init" ],
+					options : {
+						file : "agents/new-agent.agent.yml",
+						name : "new-agent",
+						region : "fra1",
+						"dashboard-username" : "operator",
+						"age-recipient" : "age1testrecipient"
+					}
+				});
+
+				expect(result.valid).toBeTrue();
+				expect(result.action).toBe("init");
+				expect(result.name).toBe("new-agent");
+				expect(result.ageRecipient).toBe("age1testrecipient");
+				expect(result.values.region).toBe("fra1");
+				expect(result.values.dashboardUsername).toBe("operator");
+			});
+
+			it("requires init identity and target explicitly", () => {
+				expect(parser.parse({
+					positionals : [ "agent", "init" ],
+					options : { name : "new-agent" }
+				}).error).toBe("agent init requires '--file'");
+				expect(parser.parse({
+					positionals : [ "agent", "init" ],
+					options : { file : "agent.yml" }
+				}).error).toBe("agent init requires '--name'");
+			});
+
+			it("parses doctor with only an explicit bundle and verbose", () => {
+				var result = parser.parse({
+					positionals : [ "agent", "doctor" ],
+					options : { file : "agent.yml", verbose : true }
+				});
+
+				expect(result.valid).toBeTrue();
+				expect(result.action).toBe("doctor");
+				expect(result.file).toBe("agent.yml");
+				expect(result.verbose).toBeTrue();
+				expect(parser.parse({
+					positionals : [ "agent", "doctor" ],
+					options : { file : "agent.yml", region : "fra1" }
+				}).error).toBe("unknown option '--region' for agent doctor");
+			});
+
 			it("captures supported CLI overrides and archive intent", () => {
 				var result = parser.parse({
 					positionals : [ "agent", "inspect" ],

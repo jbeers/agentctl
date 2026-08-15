@@ -3,24 +3,32 @@ class {
 	function parse(required struct cli) {
 		var positionals = arguments.cli.positionals;
 		var options = arguments.cli.options;
-
 		if (arrayLen(positionals) < 2) {
 			return invalid("a namespace and command are required");
 		}
 		if (positionals[1] != "agent") {
 			return invalid("unknown namespace '" & positionals[1] & "'");
 		}
-		if (positionals[2] != "inspect") {
-			return invalid("unknown agent command '" & positionals[2] & "'");
+
+		var action = positionals[2];
+		if (action != "inspect" && action != "init" && action != "doctor") {
+			return invalid("unknown agent command '" & action & "'");
 		}
 		if (arrayLen(positionals) > 2) {
-			return invalid("agent inspect received too many positional arguments");
+			return invalid("agent " & action & " received too many positional arguments");
 		}
 
-		var allowed = "file,region,size,hostname,runtime-image,state-archive,workspace-archive,verbose";
+		var allowed = action == "inspect" ?
+			"file,region,size,hostname,runtime-image,state-archive,workspace-archive,verbose" :
+			action == "init" ?
+				"file,name,region,size,hostname,runtime-image,dashboard-username,age-recipient,verbose" :
+				"file,verbose";
 		for (var optionName in structKeyArray(options)) {
 			if (listFindNoCase(allowed, optionName) == 0) {
-				return invalid("unknown option '--" & optionName & "'");
+				return invalid(
+					"unknown option '--" & optionName & "'" &
+					(action == "inspect" ? "" : " for agent " & action)
+				);
 			}
 			if (optionName == "verbose") {
 				if (!isBoolean(options[optionName]) || !options[optionName]) {
@@ -30,24 +38,52 @@ class {
 				return invalid("option '--" & optionName & "' requires a value");
 			}
 		}
+		if (action == "init" && structIsEmpty(options)) {
+			return {
+				valid : true,
+				namespace : "agent",
+				action : "init",
+				wizard : true,
+				verbose : false
+			};
+		}
 		if (!structKeyExists(options, "file")) {
-			return invalid("agent inspect requires '--file'");
+			return invalid("agent " & action & " requires '--file'");
+		}
+		if (action == "init" && !structKeyExists(options, "name")) {
+			return invalid("agent init requires '--name'");
 		}
 
 		var result = {
 			valid : true,
 			namespace : "agent",
-			action : "inspect",
+			action : action,
 			file : trim(options.file),
-			verbose : structKeyExists(options, "verbose"),
-			overrides : {}
+			verbose : structKeyExists(options, "verbose")
 		};
-		copyOption(options, "region", result.overrides, "region");
-		copyOption(options, "size", result.overrides, "size");
-		copyOption(options, "hostname", result.overrides, "hostname");
-		copyOption(options, "runtime-image", result.overrides, "runtimeImage");
-		copyOption(options, "state-archive", result.overrides, "stateArchive");
-		copyOption(options, "workspace-archive", result.overrides, "workspaceArchive");
+		if (action == "doctor") {
+			return result;
+		}
+
+		if (action == "inspect") {
+			result.overrides = {};
+			copyOption(options, "region", result.overrides, "region");
+			copyOption(options, "size", result.overrides, "size");
+			copyOption(options, "hostname", result.overrides, "hostname");
+			copyOption(options, "runtime-image", result.overrides, "runtimeImage");
+			copyOption(options, "state-archive", result.overrides, "stateArchive");
+			copyOption(options, "workspace-archive", result.overrides, "workspaceArchive");
+			return result;
+		}
+
+		result.name = trim(options.name);
+		result.ageRecipient = structKeyExists(options, "age-recipient") ? trim(options["age-recipient"]) : "";
+		result.values = {};
+		copyOption(options, "region", result.values, "region");
+		copyOption(options, "size", result.values, "size");
+		copyOption(options, "hostname", result.values, "hostname");
+		copyOption(options, "runtime-image", result.values, "runtimeImage");
+		copyOption(options, "dashboard-username", result.values, "dashboardUsername");
 		return result;
 	}
 

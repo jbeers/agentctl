@@ -2,6 +2,50 @@
 
 A V2 agent bundle is one YAML file containing readable agent intent and one dedicated encrypted secret subtree. Provider login, the operator's age private identity, and local Tailscale membership stay outside the bundle.
 
+## Initialize a bundle
+
+With no options, initialization starts an interactive wizard:
+
+```bash
+./bin/agentctl agent init
+```
+
+The wizard asks for the agent name, bundle path, DigitalOcean region and size, Tailscale hostname, runtime image, dashboard username, and age recipient. Press Enter to accept a displayed default. A blank age recipient uses a matching SOPS creation rule. The wizard proposes `<agent-name>.agent.yml` but does not scan the current directory or overwrite an existing path. Supplying any option selects the flag-based form, where both `--name` and `--file` remain required.
+
+For the flag-based form, provide the identity and target explicitly:
+
+```bash
+./bin/agentctl agent init \
+  --name sample-agent \
+  --file agents/sample-agent.agent.yml \
+  --age-recipient age1replace-with-your-public-recipient
+```
+
+`--age-recipient` is optional when a matching SOPS creation rule supplies recipients. The selected recipient must include the local operator, because initialization proves that the encrypted bundle can be decrypted before asking for credentials.
+
+Initialization then prompts, with terminal echo disabled, for:
+
+1. A confirmed Tailscale enrollment key.
+2. A confirmed Hermes dashboard password.
+3. An optional confirmed registry pull token.
+
+Before those prompts, `agentctl` verifies `sops`, `ssh-keygen`, encryption, partial-encryption policy, and local age decryption. It generates a dedicated Ed25519 identity plus Hermes API and dashboard-signing keys. Secret values enter SOPS through standard input, never process arguments. Provider credentials and age private identities are never copied into the bundle.
+
+The target must not exist. The completed bundle is published atomically with mode `0600`; temporary encrypted bundle and SSH-key files are also mode `0600` and are removed after success or failure.
+
+Public choices can be supplied during initialization:
+
+```bash
+./bin/agentctl agent init \
+  --name sample-agent \
+  --file agents/sample-agent.agent.yml \
+  --region fra1 \
+  --size s-2vcpu-4gb \
+  --hostname sample-agent \
+  --runtime-image ghcr.io/example/hermes:sha-0123456 \
+  --dashboard-username operator
+```
+
 ## Minimal bundle
 
 ```yaml
@@ -83,7 +127,7 @@ creation_rules:
     age: age1replace-with-an-authorized-recipient
 ```
 
-Use your normal SOPS editing workflow. Never first save credentials in a plaintext bundle. `agentctl` runs SOPS with an argv-based command, reads decrypted YAML directly from command output, keeps it in memory, and never writes a decrypted bundle.
+`agent init` is the canonical way to create the encrypted file. If editing it later with SOPS, never first save credentials in a plaintext bundle. `agentctl` runs SOPS with argv-based commands, reads decrypted YAML directly from command output, keeps it in memory, and never writes a decrypted bundle.
 
 Inspection prints only these states:
 
@@ -113,3 +157,19 @@ Per-command archive intent can be included without storing paths in the bundle:
 Inspection reports each archive as provided but does not print its path or read the archive. Archive restoration is added by later lifecycle work.
 
 The lifecycle summary makes retention explicit: `down` will discard the Droplet and `/workdir`, while retaining the provider volume mounted into Hermes at `/opt/data`.
+
+## Doctor
+
+```bash
+./bin/agentctl agent doctor --file agents/sample-agent.agent.yml
+```
+
+Doctor performs no resource creation or mutation. It checks:
+
+- Local `doctl`, `sops`, `ssh`, `scp`, and `ssh-keygen` availability.
+- An `xdg-open` or `open` browser launcher.
+- SOPS/age decryption and required bundle credentials.
+- The generated SSH private key using a temporary mode-`0600` file.
+- DigitalOcean authentication using the read-only `doctl account get` command.
+
+Failures are labeled as a local `prerequisite`, `bundle`, or `provider authentication` problem. Tool output, decrypted values, private-key material, and provider credentials are never included in doctor output.

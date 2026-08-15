@@ -1,27 +1,97 @@
 import src.models.CommandParser;
 import src.services.BundleService;
 import src.services.CommandRunner;
+import src.services.DoctorService;
+import src.services.InitService;
 
 function usage(boolean errorStream = false) {
 	var lines = [
 		"agentctl",
 		"",
 		"Usage:",
+		"  agentctl agent init                                      Interactive wizard",
+		"  agentctl agent init --name <name> --file <bundle> [options]",
 		"  agentctl agent inspect --file <bundle> [options]",
+		"  agentctl agent doctor --file <bundle> [--verbose]",
 		"",
-		"Options:",
+		"Init options:",
+		"  --age-recipient <age1...>    Otherwise use the matching SOPS creation rule",
+		"  --region <region>",
+		"  --size <droplet-size>",
+		"  --hostname <tailscale-hostname>",
+		"  --runtime-image <image:tag>",
+		"  --dashboard-username <name>",
+		"",
+		"Inspect options:",
 		"  --region <region>",
 		"  --size <droplet-size>",
 		"  --hostname <tailscale-hostname>",
 		"  --runtime-image <image:tag>",
 		"  --state-archive <path>       Per invocation; never stored in the bundle",
 		"  --workspace-archive <path>   Per invocation; never stored in the bundle",
+		"",
+		"Common options:",
 		"  --verbose",
 		"",
 		"Bundle selection is always explicit; agentctl does not scan the current directory."
 	];
 	for (var line in lines) {
 		systemOutput(line, true, arguments.errorStream);
+	}
+}
+
+function promptValue(required string label, string defaultValue = "") {
+	while (true) {
+		var suffix = arguments.defaultValue == "" ? ": " : " [" & arguments.defaultValue & "]: ";
+		var value = trim(cliRead(arguments.label & suffix));
+		if (value != "") return value;
+		if (arguments.defaultValue != "") return arguments.defaultValue;
+		systemOutput(arguments.label & " must not be empty.", true, true);
+	}
+}
+
+function initWizard(required any bundles) {
+	systemOutput("Initialize a portable V2 agent bundle. Press Enter to accept a displayed default.", true);
+	var name = promptValue("Agent name");
+	var defaults = arguments.bundles.parse({ version : 2, identity : { name : name } }).values;
+	return {
+		action : "init",
+		name : name,
+		file : promptValue("Bundle path", name & ".agent.yml"),
+		values : {
+			region : promptValue("DigitalOcean region", defaults.region.value),
+			size : promptValue("Droplet size", defaults.computeSize.value),
+			hostname : promptValue("Tailscale hostname", defaults.hostname.value),
+			runtimeImage : promptValue("Runtime image", defaults.runtimeImage.value),
+			dashboardUsername : promptValue("Hermes dashboard username", defaults.dashboardUsername.value)
+		},
+		ageRecipient : trim(cliRead("Age recipient (leave empty to use a SOPS creation rule): ")),
+		verbose : false
+	};
+}
+
+function confirmedSecret(required string label) {
+	while (true) {
+		var value = cliReadPassword(arguments.label & ": ");
+		if (value == "") {
+			systemOutput(arguments.label & " must not be empty.", true, true);
+			continue;
+		}
+		var confirmation = cliReadPassword("Confirm " & lCase(arguments.label) & ": ");
+		if (value == confirmation) {
+			return value;
+		}
+		systemOutput("Values did not match; try again.", true, true);
+	}
+}
+
+function optionalConfirmedSecret(required string label) {
+	while (true) {
+		var value = cliReadPassword(arguments.label & " (leave empty when not needed): ");
+		if (value == "") return "";
+		var confirmation = cliReadPassword("Confirm " & lCase(arguments.label) & ": ");
+		if (value == confirmation) return value;
+		systemOutput("Values did not match; try again.", true, true);
 	}
 }
 
@@ -40,15 +110,47 @@ if (!command.valid) {
 }
 
 try {
-	service = new BundleService(new CommandRunner());
-	plan = service.resolve(command.file, command.overrides);
-	if (command.verbose) {
-		systemOutput("agent inspect: validated explicit " & (plan.encrypted ? "SOPS-encrypted" : "plaintext") & " bundle", true, true);
+	runner = new CommandRunner();
+	bundles = new BundleService(runner);
+	if (command.action == "init" && structKeyExists(command, "wizard") && command.wizard) {
+		command = initWizard(bundles);
 	}
-	systemOutput(service.formatInspection(plan), true);
+	if (command.action == "inspect") {
+		plan = bundles.resolve(command.file, command.overrides);
+		if (command.verbose) {
+			systemOutput("agent inspect: validated explicit " & (plan.encrypted ? "SOPS-encrypted" : "plaintext") & " bundle", true, true);
+		}
+		systemOutput(bundles.formatInspection(plan), true);
+		exit(0);
+	}
+	if (command.action == "doctor") {
+		doctor = new DoctorService(runner, bundles);
+		result = doctor.check(command.file);
+		systemOutput(doctor.format(result), true, !result.healthy);
+		exit(result.healthy ? 0 : 1);
+	}
+
+	initializer = new InitService(runner, bundles);
+	prepared = initializer.prepare(command.name, command.file, command.values, command.ageRecipient);
+	if (command.verbose) {
+		systemOutput("agent init: SOPS encryption and local decryption validated before secret prompts", true, true);
+	}
+	while (true) {
+		tailscaleAuthKey = confirmedSecret("Tailscale enrollment key");
+		try {
+			initializer.validateTailscaleAuthKey(tailscaleAuthKey);
+			break;
+		} catch (validationError) {
+			systemOutput(validationError.message, true, true);
+		}
+	}
+	dashboardPassword = confirmedSecret("Hermes dashboard password");
+	registryToken = optionalConfirmedSecret("Registry pull token");
+	target = initializer.create(prepared, tailscaleAuthKey, dashboardPassword, registryToken);
+	systemOutput("Created agent bundle '" & target & "'.", true);
 	exit(0);
 } catch (error) {
-	message = structKeyExists(error, "message") ? error.message : "inspection failed";
+	message = structKeyExists(error, "message") ? error.message : "operation failed";
 	systemOutput("agentctl: " & message, true, true);
 	exit(1);
 }

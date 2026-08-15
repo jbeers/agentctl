@@ -10,6 +10,10 @@ class {
 	}
 
 	function resolve(required string path, struct overrides = {}) {
+		return resolveForUse(arguments.path, arguments.overrides).plan;
+	}
+
+	function resolveForUse(required string path, struct overrides = {}) {
 		var content = "";
 		var canonicalPath = "";
 		try {
@@ -65,7 +69,7 @@ class {
 		var plan = buildPlan(document, arguments.overrides);
 		plan.bundlePath = canonicalPath;
 		plan.encrypted = encrypted;
-		return plan;
+		return { plan : plan, secretValues : extractSecretValues(document) };
 	}
 
 	function parse(required any raw, struct overrides = {}) {
@@ -126,6 +130,25 @@ class {
 			output &= (output == "" ? "" : char(10)) & line;
 		}
 		return output;
+	}
+
+	private function extractSecretValues(required struct document) {
+		var secrets = section(arguments.document, "secrets", "bundle.secrets", false);
+		var hermes = section(secrets, "hermes", "bundle.secrets.hermes", false);
+		var sshPrivateKey = secretValue(secrets, "sshPrivateKey");
+		if (sshPrivateKey != "" && right(sshPrivateKey, 1) != char(10)) sshPrivateKey &= char(10);
+		return {
+			sshPrivateKey : sshPrivateKey,
+			tailscaleAuthKey : secretValue(secrets, "tailscaleAuthKey"),
+			registryToken : secretValue(secrets, "registryToken"),
+			apiServerKey : secretValue(hermes, "apiServerKey"),
+			dashboardPassword : secretValue(hermes, "dashboardPassword"),
+			dashboardSecret : secretValue(hermes, "dashboardSecret")
+		};
+	}
+
+	private function secretValue(required struct values, required string key) {
+		return hasValue(arguments.values, arguments.key) ? arguments.values[arguments.key] : "";
 	}
 
 	private function buildPlan(required struct document, required struct overrides) {

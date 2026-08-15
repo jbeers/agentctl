@@ -1,0 +1,305 @@
+import tests.support.FakeCommandRunner;
+
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("InitService", () => {
+			it("creates an inspectable mode-0600 bundle with generated credentials sent only over SOPS stdin", () => {
+				var target = unusedPath("created-agent");
+				var state = { values : {}, failSet : false };
+				var runner = scriptedRunner("created-agent", state);
+				var bundles = new src.services.BundleService(runner);
+				var service = new src.services.InitService(runner, bundles);
+				try {
+					var prepared = service.prepare(
+						"created-agent",
+						target,
+						{ region : "fra1", dashboardUsername : "operator" },
+						"age1testrecipient"
+					);
+					expect(fileExists(target)).toBeFalse();
+					service.create(
+						prepared,
+						"tskey-auth-test_value",
+						"dashboard-password",
+						"registry-token"
+					);
+
+					var source = fileRead(target);
+					var output = bundles.inspect(target);
+					expect(source).toInclude("name: created-agent");
+					expect(source).toInclude("region: fra1");
+					expect(source).toInclude("strategy: provider-volume");
+					expect(source).toInclude("method: openssh-over-tailscale");
+					expect(source).toInclude("dashboardUsername: operator");
+					expect(source).toInclude("ENC[AES256_GCM");
+					expect(source).notToInclude("tskey-auth-test_value");
+					expect(source).notToInclude("dashboard-password");
+					expect(source).notToInclude("PRIVATE KEY");
+					expect(output).toInclude("SSH private key: generated");
+					expect(output).toInclude("Tailscale enrollment key: configured");
+					expect(output).notToInclude("dashboard-password");
+					expect(fileMode(target)).toBe("600");
+
+					var setCalls = [];
+					var generatedPrivateKey = "";
+					for (var call in runner.getCalls()) {
+						if (call.executable == "sops" && call.arguments[1] == "set") {
+							arrayAppend(setCalls, call);
+							var value = jsonDeserialize(call.input);
+							expect(jsonSerialize(call.arguments)).notToInclude(value);
+							if (find("sshPrivateKey", call.arguments[4]) > 0) {
+								generatedPrivateKey = value;
+							}
+						}
+					}
+					expect(setCalls).toHaveLength(6);
+					for (var call in setCalls) {
+						expect(call.arguments[2]).toBe("--value-stdin");
+					}
+					expect(generatedPrivateKey).notToBe("");
+					expect(validPrivateKey(generatedPrivateKey)).toBeTrue();
+					expect(len(state.values.apiServerKey)).toBe(64);
+					expect(len(state.values.dashboardSecret)).toBe(64);
+					expect(state.values.apiServerKey).notToBe(state.values.dashboardSecret);
+
+					var encryptCall = runner.getCalls()[1];
+					expect(encryptCall.arguments).toInclude("--age");
+					expect(encryptCall.arguments).toInclude("age1testrecipient");
+					expect(encryptCall.arguments).toInclude("--encrypted-regex");
+					expect(encryptCall.input).notToInclude("tskey-auth-test_value");
+				} finally {
+					if (fileExists(target)) fileDelete(target);
+				}
+			});
+
+			it("refuses an existing target before invoking tools", () => {
+				var target = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-existing-", ".agent.yml");
+				var runner = new FakeCommandRunner();
+				try {
+					expect(() => new src.services.InitService(
+						runner,
+						new src.services.BundleService(runner)
+					).prepare("existing-agent", target)).toThrow(
+						message="refusing to overwrite existing agent bundle '" & target & "'"
+					);
+					expect(runner.getCalls()).toHaveLength(0);
+				} finally {
+					fileDelete(target);
+				}
+			});
+
+			it("does not resolve a bare target filename to the filesystem root", () => {
+				var fileName = listLast(replace(unusedPath("relative-target"), "\", "/", "all"), "/");
+				var state = { values : {}, failSet : false };
+				var runner = scriptedRunner("relative-agent", state);
+				var prepared = new src.services.InitService(
+					runner,
+					new src.services.BundleService(runner)
+				).prepare("relative-agent", fileName, {}, "age1testrecipient");
+
+				expect(prepared.target).notToBe("/" & fileName);
+				expect(listLast(replace(prepared.target, "\", "/", "all"), "/")).toBe(fileName);
+				expect(fileExists(prepared.target)).toBeFalse();
+			});
+
+			it("rejects unusable encryption configuration before initialization", () => {
+				var target = unusedPath("encryption-failure");
+				var handler = (executable, commandArguments, input) => {
+					return { exitCode : 1, output : "", error : "must-not-leak", timeout : false };
+				};
+				var runner = new FakeCommandRunner([], true, handler);
+				var service = new src.services.InitService(runner, new src.services.BundleService(runner));
+
+				expect(() => service.prepare("encryption-failure", target)).toThrow(
+					message="could not encrypt the agent bundle; check SOPS/age configuration"
+				);
+				expect(fileExists(target)).toBeFalse();
+				expect(runner.getCalls()).toHaveLength(1);
+				expect(runner.getCalls()[1].executable).toBe("sops");
+			});
+
+			it("rejects a SOPS rule that leaves secret values readable", () => {
+				var target = unusedPath("wrong-sops-rule");
+				var encryptedMarker = jsonSerialize("ENC[AES256_GCM,data:dGVzdA==,iv:dGVzdA==,tag:dGVzdA==,type:str]");
+				var wrongEncryption = replace(
+					encryptedContent("wrong-sops-rule"),
+					encryptedMarker,
+					jsonSerialize("plaintext-validation-value"),
+					"one"
+				);
+				var handler = (executable, commandArguments, input) => {
+					return { exitCode : 0, output : wrongEncryption, error : "", timeout : false };
+				};
+				var runner = new FakeCommandRunner([], true, handler);
+				var service = new src.services.InitService(runner, new src.services.BundleService(runner));
+
+				expect(() => service.prepare("wrong-sops-rule", target)).toThrow(
+					message="SOPS configuration must encrypt only the secrets subtree and allow local decryption"
+				);
+				expect(fileExists(target)).toBeFalse();
+				expect(runner.getCalls()).toHaveLength(1);
+			});
+
+			it("removes temporary bundle and key files when secret insertion fails", () => {
+				var target = unusedPath("cleanup-agent");
+				var state = { values : {}, failSet : true };
+				var runner = scriptedRunner("cleanup-agent", state);
+				var service = new src.services.InitService(runner, new src.services.BundleService(runner));
+				var prepared = service.prepare("cleanup-agent", target, {}, "age1testrecipient");
+
+				expect(() => service.create(
+					prepared,
+					"tskey-auth-test_value",
+					"dashboard-password"
+				)).toThrow(message="setting encrypted bundle secret failed");
+				expect(fileExists(target)).toBeFalse();
+
+				for (var call in runner.getCalls()) {
+					if (call.executable == "ssh-keygen") {
+						expect(fileExists(call.arguments[7])).toBeFalse();
+						expect(fileExists(call.arguments[7] & ".pub")).toBeFalse();
+					}
+					if (call.executable == "sops" && call.arguments[1] == "set") {
+						expect(fileExists(call.arguments[3])).toBeFalse();
+					}
+				}
+			});
+		});
+	}
+
+	private function scriptedRunner(required string name, required struct state) {
+		var handler = (executable, commandArguments, input) => {
+			if (arguments.executable == "ssh-keygen" || arguments.executable == "ln") {
+				return systemExecute(arguments.executable, arguments.commandArguments);
+			}
+			if (arguments.executable != "sops") {
+				return { exitCode : 0, output : "", error : "", timeout : false };
+			}
+			if (arguments.commandArguments[1] == "--encrypt") {
+				return {
+					exitCode : 0,
+					output : encryptedContent(name),
+					error : "",
+					timeout : false
+				};
+			}
+			if (arguments.commandArguments[1] == "--decrypt") {
+				return {
+					exitCode : 0,
+					output : decryptedContent(name, state.values),
+					error : "",
+					timeout : false
+				};
+			}
+			if (arguments.commandArguments[1] == "set") {
+				if (state.failSet) {
+					return { exitCode : 1, output : "", error : "secret-value-must-not-leak", timeout : false };
+				}
+				var path = arguments.commandArguments[4];
+				var value = jsonDeserialize(arguments.input);
+				if (find("sshPrivateKey", path) > 0) state.values.sshPrivateKey = value;
+				if (find("tailscaleAuthKey", path) > 0) state.values.tailscaleAuthKey = value;
+				if (find("registryToken", path) > 0) state.values.registryToken = value;
+				if (find("apiServerKey", path) > 0) state.values.apiServerKey = value;
+				if (find("dashboardPassword", path) > 0) state.values.dashboardPassword = value;
+				if (find("dashboardSecret", path) > 0) state.values.dashboardSecret = value;
+				fileWrite(arguments.commandArguments[3], encryptedContent(name));
+				fileSetAccessMode(arguments.commandArguments[3], "600");
+				return { exitCode : 0, output : "", error : "", timeout : false };
+			}
+			return { exitCode : 1, output : "", error : "unexpected command", timeout : false };
+		};
+		return new FakeCommandRunner([], true, handler);
+	}
+
+	private function encryptedContent(required string name) {
+		var encrypted = jsonSerialize("ENC[AES256_GCM,data:dGVzdA==,iv:dGVzdA==,tag:dGVzdA==,type:str]");
+		return "version: 2" & char(10) &
+			"identity:" & char(10) &
+			"  name: " & arguments.name & char(10) &
+			"compute:" & char(10) &
+			"  provider: digitalocean" & char(10) &
+			"  region: fra1" & char(10) &
+			"  size: s-4vcpu-8gb" & char(10) &
+			"state:" & char(10) &
+			"  strategy: provider-volume" & char(10) &
+			"  size: 10GiB" & char(10) &
+			"access:" & char(10) &
+			"  method: openssh-over-tailscale" & char(10) &
+			"  hostname: " & arguments.name & char(10) &
+			"runtime:" & char(10) &
+			"  image: ghcr.io/jbeers/cloud-agent-coder:sha-dfb0aaa" & char(10) &
+			"hermes:" & char(10) &
+			"  initial:" & char(10) &
+			"    dashboardUsername: operator" & char(10) &
+			"secrets:" & char(10) &
+			"  sshPrivateKey: " & encrypted & char(10) &
+			"  tailscaleAuthKey: " & encrypted & char(10) &
+			"  registryToken: " & encrypted & char(10) &
+			"  hermes:" & char(10) &
+			"    apiServerKey: " & encrypted & char(10) &
+			"    dashboardPassword: " & encrypted & char(10) &
+			"    dashboardSecret: " & encrypted & char(10) &
+			"sops:" & char(10) &
+			"  age: []" & char(10) &
+			"  mac: " & encrypted & char(10) &
+			"  version: 3.9.4" & char(10);
+	}
+
+	private function decryptedContent(required string name, required struct values) {
+		return "version: 2" & char(10) &
+			"identity:" & char(10) &
+			"  name: " & arguments.name & char(10) &
+			"compute:" & char(10) &
+			"  provider: digitalocean" & char(10) &
+			"  region: fra1" & char(10) &
+			"  size: s-4vcpu-8gb" & char(10) &
+			"state:" & char(10) &
+			"  strategy: provider-volume" & char(10) &
+			"  size: 10GiB" & char(10) &
+			"access:" & char(10) &
+			"  method: openssh-over-tailscale" & char(10) &
+			"  hostname: " & arguments.name & char(10) &
+			"runtime:" & char(10) &
+			"  image: ghcr.io/jbeers/cloud-agent-coder:sha-dfb0aaa" & char(10) &
+			"hermes:" & char(10) &
+			"  initial:" & char(10) &
+			"    dashboardUsername: operator" & char(10) &
+			"secrets:" & char(10) &
+			"  sshPrivateKey: " & jsonSerialize(value(arguments.values, "sshPrivateKey")) & char(10) &
+			"  tailscaleAuthKey: " & jsonSerialize(value(arguments.values, "tailscaleAuthKey")) & char(10) &
+			"  registryToken: " & jsonSerialize(value(arguments.values, "registryToken")) & char(10) &
+			"  hermes:" & char(10) &
+			"    apiServerKey: " & jsonSerialize(value(arguments.values, "apiServerKey")) & char(10) &
+			"    dashboardPassword: " & jsonSerialize(value(arguments.values, "dashboardPassword")) & char(10) &
+			"    dashboardSecret: " & jsonSerialize(value(arguments.values, "dashboardSecret")) & char(10);
+	}
+
+	private function value(required struct values, required string key) {
+		return structKeyExists(arguments.values, arguments.key) ? arguments.values[arguments.key] : "";
+	}
+
+	private function validPrivateKey(required string privateKey) {
+		var path = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-key-check-", ".tmp");
+		try {
+			fileSetAccessMode(path, "600");
+			fileWrite(path, arguments.privateKey);
+			var result = systemExecute("ssh-keygen", [ "-y", "-P", "", "-f", path ]);
+			return result.exitCode == 0;
+		} finally {
+			if (fileExists(path)) fileDelete(path);
+		}
+	}
+
+	private function fileMode(required string path) {
+		return trim(systemExecute("stat", [ "-c", "%a", arguments.path ]).output);
+	}
+
+	private function unusedPath(required string prefix) {
+		var path = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-" & arguments.prefix & "-", ".agent.yml");
+		fileDelete(path);
+		return path;
+	}
+
+}

@@ -1,0 +1,117 @@
+class {
+
+	function init(required any commandRunner, required any bundleService) {
+		variables.runner = arguments.commandRunner;
+		variables.bundles = arguments.bundleService;
+		return this;
+	}
+
+	function check(required string path) {
+		var failures = [];
+		var available = {};
+		for (var tool in [ "doctl", "sops", "ssh", "scp", "ssh-keygen" ]) {
+			available[tool] = variables.runner.isAvailable(tool);
+			if (!available[tool]) {
+				arrayAppend(failures, "prerequisite: " & tool & " is not installed or is not on PATH");
+			}
+		}
+		if (!variables.runner.isAvailable("xdg-open") && !variables.runner.isAvailable("open")) {
+			arrayAppend(failures, "prerequisite: no supported browser launcher found");
+		}
+
+		if (available.doctl) {
+			var account = {};
+			try {
+				account = variables.runner.run(
+					"doctl",
+					[ "account", "get", "--format", "Status", "--no-header" ]
+				);
+			} catch (providerError) {
+				account = { exitCode : 1 };
+			}
+			if (!succeeded(account)) {
+				arrayAppend(failures, "provider authentication: DigitalOcean authentication failed");
+			}
+		}
+
+		var resolved = {};
+		try {
+			resolved = variables.bundles.resolveForUse(arguments.path);
+		} catch (error) {
+			arrayAppend(failures, "bundle: " & safeMessage(error));
+		}
+		if (structKeyExists(resolved, "plan")) {
+			checkRequiredSecrets(resolved.plan, failures);
+			if (resolved.plan.secrets.sshPrivateKey != "missing" && available["ssh-keygen"]) {
+				checkPrivateKey(resolved.secretValues.sshPrivateKey, failures);
+			}
+		}
+		return {
+			healthy : arrayLen(failures) == 0,
+			failures : failures
+		};
+	}
+
+	function format(required struct result) {
+		if (arguments.result.healthy) {
+			return "agent doctor: bundle and local prerequisites are healthy";
+		}
+		var output = "";
+		for (var failure in arguments.result.failures) {
+			output &= (output == "" ? "" : char(10)) & "agent doctor: " & failure;
+		}
+		return output;
+	}
+
+	private function checkRequiredSecrets(required struct plan, required array failures) {
+		var requiredSecrets = [
+			{ key : "sshPrivateKey", label : "SSH private key" },
+			{ key : "tailscaleAuthKey", label : "Tailscale enrollment key" },
+			{ key : "apiServerKey", label : "Hermes API key" },
+			{ key : "dashboardPassword", label : "Hermes dashboard password" },
+			{ key : "dashboardSecret", label : "Hermes dashboard signing secret" }
+		];
+		for (var secret in requiredSecrets) {
+			if (arguments.plan.secrets[secret.key] == "missing") {
+				arrayAppend(arguments.failures, "bundle: " & secret.label & " is missing");
+			}
+		}
+	}
+
+	private function checkPrivateKey(required string privateKey, required array failures) {
+		var path = createTempFile(getSystemSetting("TMPDIR", "/tmp"), ".agentctl-doctor-ssh-", ".key");
+		try {
+			fileSetAccessMode(path, "600");
+			fileWrite(path, arguments.privateKey);
+			var result = {};
+			try {
+				result = variables.runner.run(
+					"ssh-keygen",
+					[ "-y", "-P", "", "-f", path ]
+				);
+			} catch (keyError) {
+				result = { exitCode : 1 };
+			}
+			if (!succeeded(result)) {
+				arrayAppend(arguments.failures, "bundle: SSH private key is invalid or passphrase-protected");
+			}
+		} finally {
+			if (fileExists(path)) fileDelete(path);
+		}
+	}
+
+	private function safeMessage(required any error) {
+		if (isStruct(arguments.error) && structKeyExists(arguments.error, "message")) {
+			return arguments.error.message;
+		}
+		return "agent bundle validation failed";
+	}
+
+	private function succeeded(required struct result) {
+		return structKeyExists(arguments.result, "exitCode") &&
+			!isNull(arguments.result.exitCode) &&
+			arguments.result.exitCode == 0 &&
+			(!structKeyExists(arguments.result, "timeout") || !arguments.result.timeout);
+	}
+
+}
