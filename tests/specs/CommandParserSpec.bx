@@ -94,10 +94,16 @@ class extends="testbox.system.BaseSpec" {
 					positionals : [ "agent", "up" ],
 					options : {}
 				}).error).toBe("agent up requires '--file'");
-				expect(parser.parse({
+				var restore = parser.parse({
 					positionals : [ "agent", "up" ],
 					options : { file : "agent.yml", "state-archive" : "state.tar" }
-				}).error).toBe("unknown option '--state-archive' for agent up");
+				});
+				expect(restore.valid).toBeTrue();
+				expect(restore.overrides.stateArchive).toBe("state.tar");
+				expect(parser.parse({
+					positionals : [ "agent", "up" ],
+					options : { file : "agent.yml", "workspace-archive" : "workspace.tar" }
+				}).error).toBe("unknown option '--workspace-archive' for agent up");
 			});
 
 			it("parses open with an explicit bundle and hostname override", () => {

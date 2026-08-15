@@ -1,0 +1,283 @@
+class {
+
+	function init(required any commandRunner) {
+		variables.runner = arguments.commandRunner;
+		return this;
+	}
+
+	function prepare(required string path) {
+		if (trim(arguments.path) == "") fail("--state-archive requires a non-empty path");
+		if (arrayLen(reMatch("[[:cntrl:]]", arguments.path)) > 0) fail("state archive path contains unsupported characters");
+		if (!variables.runner.isAvailable("python3")) fail("python3 is required to restore a state archive");
+
+		var sourcePath = trim(arguments.path);
+		if (left(sourcePath, 1) != "/") {
+			var operatorDirectory = getSystemSetting("PWD", getCanonicalPath("."));
+			if (right(operatorDirectory, 1) != "/") operatorDirectory &= "/";
+			sourcePath = operatorDirectory & sourcePath;
+		}
+		var temporaryPath = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-state-archive-", ".tar");
+		try {
+			fileSetAccessMode(temporaryPath, "600");
+		} catch (error) {
+			deleteTemporary(temporaryPath);
+			fail("could not prepare the state archive");
+		}
+		var result = {};
+		try {
+			result = variables.runner.run(
+				"python3",
+				[ "-c", validatorProgram(), "prepare", sourcePath, temporaryPath ]
+			);
+		} catch (error) {
+			deleteTemporary(temporaryPath);
+			fail("could not prepare the state archive");
+		}
+		if (!succeeded(result)) {
+			deleteTemporary(temporaryPath);
+			if (structKeyExists(result, "exitCode") && result.exitCode == 2) {
+				fail("state archive must be a readable regular tar file");
+			}
+			if (structKeyExists(result, "exitCode") && result.exitCode == 3) {
+				fail("state archive contains unsafe or invalid entries");
+			}
+			fail("could not prepare the state archive");
+		}
+
+		var metadata = {};
+		var metadataValid = false;
+		try {
+			metadata = jsonDeserialize(trim(result.output));
+			metadataValid = isStruct(metadata) &&
+				structKeyExists(metadata, "source") && isSimpleValue(metadata.source) &&
+				structKeyExists(metadata, "size") && isNumeric(metadata.size) && metadata.size >= 0 &&
+				structKeyExists(metadata, "digest") && isSimpleValue(metadata.digest) &&
+				arrayLen(reMatch("^[a-f0-9]{64}$", metadata.digest)) > 0;
+		} catch (error) {
+			metadataValid = false;
+		}
+		if (!metadataValid) {
+			deleteTemporary(temporaryPath);
+			fail("could not prepare the state archive");
+		}
+		return {
+			sourcePath : metadata.source,
+			temporaryPath : temporaryPath,
+			size : metadata.size,
+			digest : metadata.digest
+		};
+	}
+
+	function validatorProgram() {
+		return linesToText([
+			"import hashlib",
+			"import json",
+			"import os",
+			"import posixpath",
+			"import shutil",
+			"import stat",
+			"import sys",
+			"import tarfile",
+			"from pathlib import PurePosixPath",
+			"",
+			"class ArchiveError(Exception):",
+			"    def __init__(self, message, code):",
+			"        super().__init__(message)",
+			"        self.code = code",
+			"",
+			"SOURCE_ERROR = 'state archive must be a readable regular tar file'",
+			"VALIDATION_ERROR = 'state archive contains unsafe or invalid entries'",
+			"TARGET_ERROR = 'persistent state is not empty; state archive restore was refused'",
+			"EXTRACTION_ERROR = 'state archive extraction failed; partial restored state was removed'",
+			"",
+			"def invalid():",
+			"    raise ArchiveError(VALIDATION_ERROR, 3)",
+			"",
+			"def normalize_member(member):",
+			"    raw = member.name",
+			"    path = PurePosixPath(raw)",
+			"    if not raw or chr(0) in raw or path.is_absolute() or '..' in path.parts:",
+			"        invalid()",
+			"    parts = [part for part in path.parts if part not in ('', '.') ]",
+			"    if not parts:",
+			"        if member.isdir():",
+			"            return ''",
+			"        invalid()",
+			"    if parts[0] == 'lost+found':",
+			"        invalid()",
+			"    return '/'.join(parts)",
+			"",
+			"def normalize_link(raw, member_path, symbolic):",
+			"    path = PurePosixPath(raw)",
+			"    if not raw or chr(0) in raw or path.is_absolute() or '..' in path.parts:",
+			"        invalid()",
+			"    joined = posixpath.normpath(posixpath.join(posixpath.dirname(member_path) if symbolic else '', raw))",
+			"    if joined in ('', '.', '..') or joined.startswith('../') or joined.startswith('/'):",
+			"        invalid()",
+			"    if joined.split('/', 1)[0] == 'lost+found':",
+			"        invalid()",
+			"    return joined",
+			"",
+			"def validate_members(members):",
+			"    indexed = {}",
+			"    kinds = {}",
+			"    links = {}",
+			"    for member in members:",
+			"        name = normalize_member(member)",
+			"        if not name:",
+			"            continue",
+			"        if name in indexed:",
+			"            invalid()",
+			"        if member.isdir():",
+			"            kind = 'directory'",
+			"        elif member.isreg():",
+			"            kind = 'regular'",
+			"        elif member.issym():",
+			"            kind = 'symlink'",
+			"            links[name] = normalize_link(member.linkname, name, True)",
+			"        elif member.islnk():",
+			"            kind = 'hardlink'",
+			"            links[name] = normalize_link(member.linkname, name, False)",
+			"        else:",
+			"            invalid()",
+			"        indexed[name] = member",
+			"        kinds[name] = kind",
+			"    for name in indexed:",
+			"        parts = name.split('/')",
+			"        for length in range(1, len(parts)):",
+			"            parent = '/'.join(parts[:length])",
+			"            if parent in kinds and kinds[parent] not in ('directory', 'symlink'):",
+			"                invalid()",
+			"    for name, kind in kinds.items():",
+			"        if kind != 'hardlink':",
+			"            continue",
+			"        target = links[name]",
+			"        seen = {name}",
+			"        while True:",
+			"            if target in seen or target not in kinds:",
+			"                invalid()",
+			"            seen.add(target)",
+			"            if kinds[target] == 'regular':",
+			"                break",
+			"            if kinds[target] != 'hardlink':",
+			"                invalid()",
+			"            target = links[target]",
+			"    return list(indexed.values())",
+			"",
+			"def inspect_archive(path):",
+			"    try:",
+			"        with tarfile.open(path, 'r:*') as archive:",
+			"            members = archive.getmembers()",
+			"            validate_members(members)",
+			"        digest = hashlib.sha256()",
+			"        with open(path, 'rb') as source:",
+			"            for chunk in iter(lambda: source.read(1024 * 1024), b''):",
+			"                digest.update(chunk)",
+			"        return {'size': os.path.getsize(path), 'digest': digest.hexdigest(), 'entries': len(members)}",
+			"    except ArchiveError:",
+			"        raise",
+			"    except Exception:",
+			"        invalid()",
+			"",
+			"def secure_copy(source_path, destination_path):",
+			"    source_path = os.path.abspath(source_path)",
+			"    try:",
+			"        before = os.lstat(source_path)",
+			"        if not stat.S_ISREG(before.st_mode):",
+			"            raise OSError()",
+			"        source_fd = os.open(source_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)",
+			"        after = os.fstat(source_fd)",
+			"        if not stat.S_ISREG(after.st_mode) or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):",
+			"            os.close(source_fd)",
+			"            raise OSError()",
+			"        destination_fd = os.open(destination_path, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW)",
+			"        with os.fdopen(source_fd, 'rb') as source, os.fdopen(destination_fd, 'wb') as destination:",
+			"            shutil.copyfileobj(source, destination, 1024 * 1024)",
+			"            destination.flush()",
+			"            os.fsync(destination.fileno())",
+			"        os.chmod(destination_path, 0o600)",
+			"        return source_path",
+			"    except Exception:",
+			"        raise ArchiveError(SOURCE_ERROR, 2)",
+			"",
+			"def target_entries(target):",
+			"    try:",
+			"        if not stat.S_ISDIR(os.lstat(target).st_mode):",
+			"            raise OSError()",
+			"        entries = []",
+			"        for entry in os.scandir(target):",
+			"            if entry.name == 'lost+found' and entry.is_dir(follow_symlinks=False):",
+			"                with os.scandir(entry.path) as recovered:",
+			"                    if next(recovered, None) is None:",
+			"                        continue",
+			"            entries.append(entry)",
+			"        return entries",
+			"    except Exception:",
+			"        raise ArchiveError(TARGET_ERROR, 4)",
+			"",
+			"def clear_target(target):",
+			"    for entry in target_entries(target):",
+			"        if entry.is_dir(follow_symlinks=False):",
+			"            shutil.rmtree(entry.path)",
+			"        else:",
+			"            os.unlink(entry.path)",
+			"",
+			"def extract_archive(path, target):",
+			"    if target_entries(target):",
+			"        raise ArchiveError(TARGET_ERROR, 4)",
+			"    try:",
+			"        with tarfile.open(path, 'r:*') as archive:",
+			"            members = validate_members(archive.getmembers())",
+			"            archive.extractall(target, members=members, filter='data')",
+			"    except ArchiveError:",
+			"        clear_target(target)",
+			"        raise",
+			"    except Exception:",
+			"        clear_target(target)",
+			"        raise ArchiveError(EXTRACTION_ERROR, 5)",
+			"",
+			"def main():",
+			"    command = sys.argv[1]",
+			"    if command == 'prepare' and len(sys.argv) == 4:",
+			"        source = secure_copy(sys.argv[2], sys.argv[3])",
+			"        metadata = inspect_archive(sys.argv[3])",
+			"        metadata['source'] = source",
+			"        print(json.dumps(metadata, separators=(',', ':')))",
+			"        return",
+			"    if command == 'extract' and len(sys.argv) == 4:",
+			"        inspect_archive(sys.argv[2])",
+			"        extract_archive(sys.argv[2], sys.argv[3])",
+			"        return",
+			"    raise ArchiveError('state archive operation is invalid', 6)",
+			"",
+			"try:",
+			"    main()",
+			"except ArchiveError as error:",
+			"    print(str(error), file=sys.stderr)",
+			"    sys.exit(error.code)",
+			"except Exception:",
+			"    print('state archive operation failed', file=sys.stderr)",
+			"    sys.exit(6)"
+		]);
+	}
+
+	private function deleteTemporary(required string path) {
+		if (fileExists(arguments.path) && !directoryExists(arguments.path)) fileDelete(arguments.path);
+	}
+
+	private function succeeded(required struct result) {
+		return structKeyExists(arguments.result, "exitCode") &&
+			!isNull(arguments.result.exitCode) &&
+			arguments.result.exitCode == 0 &&
+			(!structKeyExists(arguments.result, "timeout") || !arguments.result.timeout);
+	}
+
+	private function linesToText(required array lines) {
+		return arrayToList(arguments.lines, char(10)) & char(10);
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}

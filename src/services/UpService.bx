@@ -14,7 +14,7 @@ class {
 		return this;
 	}
 
-	function up(required struct resolved, boolean verbose = false) {
+	function up(required struct resolved, boolean verbose = false, string stateArchive = "") {
 		validateResolved(arguments.resolved);
 		announce("agent up: validating local tools and generated SSH identity");
 		for (var tool in [ "doctl", "ssh", "scp", "ssh-keygen" ]) {
@@ -26,9 +26,15 @@ class {
 		var name = plan.values.name.value;
 		var hostname = plan.values.hostname.value;
 		var volumeName = plan.derived.volumeName;
-		var identityPath = secureTempFile("agentctl-up-ssh-", ".key", secrets.sshPrivateKey);
+		var preparedArchive = {};
+		var identityPath = "";
 		var cloudInitPath = "";
 		try {
+			if (trim(arguments.stateArchive) != "") {
+				announce("agent up: validating and staging the selected state archive");
+				preparedArchive = new src.services.ArchiveService(variables.runner).prepare(arguments.stateArchive);
+			}
+			identityPath = secureTempFile("agentctl-up-ssh-", ".key", secrets.sshPrivateKey);
 			var publicKey = derivePublicKey(identityPath);
 			announce("agent up: checking exact-name DigitalOcean resources for '" & name & "'");
 			var droplet = findDroplet(name);
@@ -66,7 +72,7 @@ class {
 			announce("agent up: waiting for OpenSSH over Tailscale at '" & hostname & "'");
 			var sshAttempts = waitForSsh(hostname, sshOptions);
 			announce("agent up: reconciling persistent state and the Hermes runtime");
-			reconcileRuntime(plan, secrets, sshOptions);
+			reconcileRuntime(plan, secrets, sshOptions, preparedArchive);
 			return {
 				name : name,
 				hostname : hostname,
@@ -76,10 +82,19 @@ class {
 				volumeId : volume.id,
 				volumeCreated : volumeCreated,
 				sshAttempts : sshAttempts,
+				stateArchive : structIsEmpty(preparedArchive) ? {} : {
+					sourcePath : preparedArchive.sourcePath,
+					size : preparedArchive.size,
+					digest : preparedArchive.digest
+				},
 				verbose : arguments.verbose
 			};
 		} finally {
-			deleteSensitiveFiles([ cloudInitPath, identityPath ]);
+			deleteSensitiveFiles([
+				cloudInitPath,
+				identityPath,
+				structIsEmpty(preparedArchive) ? "" : preparedArchive.temporaryPath
+			]);
 		}
 	}
 
@@ -93,8 +108,16 @@ class {
 			"  Workspace/Compose contract: verified",
 			"  Hermes gateway: healthy at http://" & arguments.result.hostname & ":8642/health"
 		];
+		if (!structIsEmpty(arguments.result.stateArchive)) {
+			arrayAppend(lines, "  State archive: restored before Hermes startup");
+		}
 		if (arguments.result.verbose) {
 			arrayAppend(lines, "  SSH/Tailscale readiness attempts: " & arguments.result.sshAttempts);
+			if (!structIsEmpty(arguments.result.stateArchive)) {
+				arrayAppend(lines, "  State archive source: " & arguments.result.stateArchive.sourcePath);
+				arrayAppend(lines, "  State archive size: " & arguments.result.stateArchive.size & " bytes");
+				arrayAppend(lines, "  State archive SHA-256: " & arguments.result.stateArchive.digest);
+			}
 		}
 		return linesToText(lines, false);
 	}
@@ -122,6 +145,7 @@ class {
 			"  - dbus-user-session",
 			"  - fuse-overlayfs",
 			"  - podman",
+			"  - python3",
 			"  - slirp4netns",
 			"  - uidmap",
 			"users:",
@@ -145,6 +169,7 @@ class {
 	}
 
 	function runtimeScript() {
+		var archiveValidator = new src.services.ArchiveService(variables.runner).validatorProgram();
 		return linesToText([
 			'##!/usr/bin/env bash',
 			'set -euo pipefail',
@@ -156,8 +181,18 @@ class {
 			'registry=$4',
 			'registry_username=$5',
 			'payload=$6',
+			'state_archive=$7',
+			'restore_pending=false',
+			'restore_target=',
+			'env_tmp=',
 			'cleanup() {',
+			'  set +e',
+			'  if [[ $restore_pending == true && -n $restore_target ]]; then',
+			'    find "$restore_target" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf -- {} +',
+			'  fi',
 			'  rm -f -- "$payload"',
+			'  [[ -z $env_tmp ]] || rm -f -- "$env_tmp"',
+			'  [[ $state_archive == - ]] || rm -f -- "$state_archive"',
 			'  [[ $script_path == "$installed_path" ]] || rm -f -- "$script_path"',
 			'}',
 			'trap cleanup EXIT',
@@ -167,10 +202,12 @@ class {
 			'[[ $registry == - || $registry =~ ^[A-Za-z0-9.-]+$ ]]',
 			'[[ $registry_username == - || $registry_username =~ ^[A-Za-z0-9-]+$ ]]',
 			'[[ $payload =~ ^/tmp/agentctl-[a-z0-9]+[.]payload$ ]]',
+			'[[ $state_archive == - || $state_archive =~ ^/tmp/agentctl-[a-z0-9]+[.]tar$ ]]',
 			'if [[ $script_path != "$installed_path" ]]; then',
 			'  install -m 0755 "$script_path" "$installed_path"',
 			'fi',
 			'chmod 0600 "$payload"',
+			'[[ $state_archive == - ]] || chmod 0600 "$state_archive"',
 			'device="/dev/disk/by-id/scsi-0DO_Volume_${volume_name}"',
 			'mount_dir="/agent-dirs/${agent_name}"',
 			'for ((attempt = 1; attempt <= 30; attempt++)); do',
@@ -215,15 +252,35 @@ class {
 			'  )',
 			'}',
 			'install -d -m 0750 -o "$agent_uid" -g "$agent_gid" "$mount_dir" /workdir',
-			'env_file="$mount_dir/.env"',
-			'IFS= read -r registry_token < "$payload" || true',
-			'if [[ ! -s $env_file ]]; then',
-			'  env_tmp=$(mktemp "$mount_dir/.env.XXXXXX")',
-			'  tail -n +2 "$payload" > "$env_tmp"',
-			'  chmod 0600 "$env_tmp"',
-			'  mv "$env_tmp" "$env_file"',
+			'if [[ $state_archive != - ]]; then',
+			'  [[ -z $(find "$mount_dir" -mindepth 1 -maxdepth 1 ! -name lost+found -printf x -quit) ]] || { printf ''agentctl runtime: persistent state is not empty; state archive restore was refused\n'' >&2; exit 44; }',
+			'  if podman_as_agent container inspect hermes >/dev/null 2>&1; then',
+			'    podman_as_agent rm --force hermes',
+			'  fi',
+			'  restore_target=$mount_dir',
+			'  restore_pending=true',
+			'  python3 - extract "$state_archive" "$mount_dir" <<''PY'' || { archive_status=$?; exit $((40 + archive_status)); }' & char(10) & archiveValidator & 'PY',
 			'fi',
-			'chmod 0600 "$env_file"',
+			'chown -R "$agent_uid:$agent_gid" "$mount_dir" /workdir',
+			'podman_as_agent unshare chown -R 10000:10000 "$mount_dir" /workdir',
+			'env_file="$mount_dir/.env"',
+			'if [[ -e $env_file || -L $env_file ]]; then',
+			'  [[ -f $env_file && ! -L $env_file ]] || { printf ''agentctl runtime: Hermes .env must be a regular file\n'' >&2; exit 1; }',
+			'fi',
+			'restore_pending=false',
+			'IFS= read -r registry_token < "$payload" || true',
+			'env_tmp=$(mktemp "$mount_dir/.env.XXXXXX")',
+			'if [[ -s $env_file ]]; then',
+			'  cat -- "$env_file" > "$env_tmp"',
+			'  [[ $(tail -c 1 "$env_file" | wc -l) -gt 0 ]] || printf ''\n'' >> "$env_tmp"',
+			'fi',
+			'while IFS= read -r initial_line; do',
+			'  initial_key=${initial_line%%=*}',
+			'  grep -q "^${initial_key}=." "$env_tmp" || printf ''%s\n'' "$initial_line" >> "$env_tmp"',
+			'done < <(tail -n +2 "$payload")',
+			'chmod 0600 "$env_tmp"',
+			'mv "$env_tmp" "$env_file"',
+			'env_tmp=',
 			'for required_key in API_SERVER_KEY HERMES_DASHBOARD_BASIC_AUTH_USERNAME HERMES_DASHBOARD_BASIC_AUTH_PASSWORD HERMES_DASHBOARD_BASIC_AUTH_SECRET; do',
 			'  grep -q "^${required_key}=." "$env_file" || { printf ''agentctl runtime: required Hermes setting is missing\n'' >&2; exit 1; }',
 			'done',
@@ -248,8 +305,6 @@ class {
 			'EOF',
 			'chmod 0644 "$managed_tmp"',
 			'mv "$managed_tmp" /etc/agentctl/hermes-managed/config.yaml',
-			'chown -R "$agent_uid:$agent_gid" "$mount_dir" /workdir',
-			'podman_as_agent unshare chown -R 10000:10000 "$mount_dir" /workdir',
 			'tailscale_ip=$(tailscale ip -4)',
 			'tailscale_ip=${tailscale_ip%%$''\n''*}',
 			'[[ -n $tailscale_ip ]] || { printf ''agentctl runtime: no Tailscale IPv4 address is available\n'' >&2; exit 1; }',
@@ -489,12 +544,20 @@ class {
 		fail("agent host did not become reachable over SSH and Tailscale");
 	}
 
-	private function reconcileRuntime(required struct plan, required struct secrets, required array sshOptions) {
+	private function reconcileRuntime(
+		required struct plan,
+		required struct secrets,
+		required array sshOptions,
+		struct stateArchive = {}
+	) {
 		var registry = registrySettings(arguments.plan.values.runtimeImage.value, arguments.secrets.registryToken);
+		var hasArchive = !structIsEmpty(arguments.stateArchive);
 		var payloadPath = "";
 		var scriptPath = "";
 		var remotePayload = remoteTempPath(".payload");
 		var remoteScript = remoteTempPath(".sh");
+		var remoteArchive = hasArchive ? remoteTempPath(".tar") : "-";
+		var archiveTransferAttempted = false;
 		var payloadTransferAttempted = false;
 		var scriptTransferAttempted = false;
 		var target = "root@" & arguments.plan.values.hostname.value;
@@ -505,6 +568,10 @@ class {
 				runtimePayload(arguments.plan, arguments.secrets)
 			);
 			scriptPath = secureTempFile("agentctl-runtime-", ".sh", runtimeScript());
+			if (hasArchive) {
+				archiveTransferAttempted = true;
+				copyToRemote(arguments.stateArchive.temporaryPath, remoteArchive, target, arguments.sshOptions, "copying the state archive");
+			}
 			payloadTransferAttempted = true;
 			copyToRemote(payloadPath, remotePayload, target, arguments.sshOptions);
 			scriptTransferAttempted = true;
@@ -516,12 +583,20 @@ class {
 				arguments.plan.values.runtimeImage.value,
 				registry.host,
 				registry.username,
-				remotePayload
+				remotePayload,
+				remoteArchive
 			]);
+			if (hasArchive && structKeyExists(result, "exitCode") && !isNull(result.exitCode)) {
+				if (result.exitCode == 43) fail("remote state archive validation failed; Hermes startup was blocked");
+				if (result.exitCode == 44) fail("persistent state is not empty; state archive restore was refused");
+				if (result.exitCode == 45) fail("state archive extraction failed; partial restored state was removed and Hermes startup was blocked");
+				if (result.exitCode == 46) fail("state archive restore failed before Hermes startup");
+			}
 			requireSuccess(result, "reconciling the Hermes runtime and health endpoint");
 		} finally {
 			var remoteCleanupFailed = scriptTransferAttempted && !removeRemote(remoteScript, target, arguments.sshOptions);
 			if (payloadTransferAttempted && !removeRemote(remotePayload, target, arguments.sshOptions)) remoteCleanupFailed = true;
+			if (archiveTransferAttempted && !removeRemote(remoteArchive, target, arguments.sshOptions)) remoteCleanupFailed = true;
 			deleteSensitiveFiles([ scriptPath, payloadPath ]);
 			if (remoteCleanupFailed) fail("removing temporary remote runtime files failed");
 		}
@@ -548,13 +623,14 @@ class {
 		required string localPath,
 		required string remotePath,
 		required string target,
-		required array sshOptions
+		required array sshOptions,
+		string label = "copying a temporary runtime file"
 	) {
 		var result = variables.runner.run(
 			"scp",
 			appendArguments(arguments.sshOptions, [ "-p", arguments.localPath, arguments.target & ":" & arguments.remotePath ])
 		);
-		requireSuccess(result, "copying a temporary runtime file");
+		requireSuccess(result, arguments.label);
 	}
 
 	private function removeRemote(required string remotePath, required string target, required array sshOptions) {

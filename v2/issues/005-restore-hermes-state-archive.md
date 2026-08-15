@@ -15,22 +15,28 @@ This is intentionally a local archive input, not a backup-provider framework. It
 
 ## Acceptance criteria
 
-- [ ] `agent up` accepts a `--state-archive` path as a per-invocation CLI input.
-- [ ] Relative archive paths resolve from the operator's current working directory, not from inside the agent bundle.
-- [ ] The source must be a readable regular tar file; directories and missing files fail before cloud mutation where possible.
-- [ ] Archive contents are defined as paths relative to `/opt/data`, with no required wrapper directory.
-- [ ] The archive is transferred through restrictive local and remote temporary files without placing content or credentials in command arguments.
-- [ ] Validation rejects absolute paths, `..` traversal, unsafe symlink or hard-link targets, device nodes, FIFOs, sockets, and entries that would escape the destination.
-- [ ] Extraction is permitted only when the target state directory is newly created or empty.
-- [ ] A non-empty state target fails clearly; it is never merged, skipped silently, or overwritten.
-- [ ] Extraction completes before `.env` seeding, launcher-owned configuration reconciliation, or Hermes startup.
-- [ ] A restored non-empty `.env` remains authoritative and is not replaced by bundle initial values.
-- [ ] Missing required initial values may be seeded only when the restored state does not already provide them.
-- [ ] Restored ownership and permissions are normalized for the rootless host user and Hermes container UID while preserving usable file modes.
-- [ ] Failed validation or extraction prevents Hermes startup and removes partial extracted content when the command created the empty target.
-- [ ] Local and remote temporary archive files are removed after success, validation failure, transfer failure, and extraction failure.
-- [ ] Verbose output may report archive path, size, digest, and stage but never archive contents.
-- [ ] Tests cover a valid state tree, restored `.env`, non-empty target, traversal, absolute path, escaping links, special files, ownership normalization, partial failure cleanup, and secret-safe diagnostics.
+- [x] `agent up` accepts a `--state-archive` path as a per-invocation CLI input.
+- [x] Relative archive paths resolve from the operator's current working directory, not from inside the agent bundle.
+- [x] The source must be a readable regular tar file; directories and missing files fail before cloud mutation where possible.
+- [x] Archive contents are defined as paths relative to `/opt/data`, with no required wrapper directory.
+- [x] The archive is transferred through restrictive local and remote temporary files without placing content or credentials in command arguments.
+- [x] Validation rejects absolute paths, `..` traversal, unsafe symlink or hard-link targets, device nodes, FIFOs, sockets, and entries that would escape the destination.
+- [x] Extraction is permitted only when the target state directory is newly created or empty.
+- [x] A non-empty state target fails clearly; it is never merged, skipped silently, or overwritten.
+- [x] Extraction completes before `.env` seeding, launcher-owned configuration reconciliation, or Hermes startup.
+- [x] A restored non-empty `.env` remains authoritative and is not replaced by bundle initial values.
+- [x] Missing required initial values may be seeded only when the restored state does not already provide them.
+- [x] Restored ownership and permissions are normalized for the rootless host user and Hermes container UID while preserving usable file modes.
+- [x] Failed validation or extraction prevents Hermes startup and removes partial extracted content when the command created the empty target.
+- [x] Local and remote temporary archive files are removed after success, validation failure, transfer failure, and extraction failure.
+- [x] Verbose output may report archive path, size, digest, and stage but never archive contents.
+- [x] Tests cover a valid state tree, restored `.env`, non-empty target, traversal, absolute path, escaping links, special files, ownership normalization, partial failure cleanup, and secret-safe diagnostics.
+
+## Verification
+
+- Generated valid and adversarial archives exercise the same Python standard-library validator embedded in host reconciliation.
+- Tests prove pre-provider rejection, restrictive staging, transfer ordering, restored configuration precedence, empty-target enforcement, ownership commands, partial cleanup, and redacted diagnostics without a live Droplet.
+- Live restoration onto a fresh provider volume remains part of the operator-approved cold-rebuild exercise in issue 010.
 
 ## Blocked by
 

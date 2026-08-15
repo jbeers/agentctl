@@ -33,9 +33,9 @@ function usage(boolean errorStream = false) {
 		"  --size <droplet-size>",
 		"  --hostname <tailscale-hostname>",
 		"  --runtime-image <image:tag>",
+		"  --state-archive <path>       Restore fresh Hermes state; never stored in the bundle",
 		"",
 		"Inspect-only options:",
-		"  --state-archive <path>       Per invocation; never stored in the bundle",
 		"  --workspace-archive <path>   Per invocation; never stored in the bundle",
 		"",
 		"Common options:",
@@ -139,7 +139,11 @@ try {
 	}
 	if (command.action == "up") {
 		up = new UpService(runner);
-		result = up.up(bundles.resolveForUse(command.file, command.overrides), command.verbose);
+		result = up.up(
+			bundles.resolveForUse(command.file, command.overrides),
+			command.verbose,
+			structKeyExists(command.overrides, "stateArchive") ? command.overrides.stateArchive : ""
+		);
 		systemOutput(up.format(result), true);
 		exit(0);
 	}

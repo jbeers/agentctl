@@ -154,7 +154,7 @@ Per-command archive intent can be included without storing paths in the bundle:
   --workspace-archive /protected/workspace.tar
 ```
 
-Inspection reports each archive as provided but does not print its path or read the archive. Archive restoration is added by later lifecycle work.
+Inspection reports each archive as provided but does not print its path or read the archive. `agent up --state-archive <path>` restores validated Hermes state into an empty `/opt/data`; workspace archive seeding is reported by inspection but is not yet available to `up`. See [Bring up an agent](agent-up.md#restore-initial-hermes-state).
 
 The lifecycle summary makes retention explicit: `down` will discard the Droplet and `/workdir`, while retaining the provider volume mounted into Hermes at `/opt/data`.
 

@@ -25,13 +25,14 @@ The same public overrides accepted by inspection are available per invocation:
 For a missing agent, `up`:
 
 1. Validates and decrypts the bundle locally.
-2. Derives the public half of the bundle's generated Ed25519 identity.
-3. Creates or reconciles the managed `agentctl-v2` tag and the `agentctl-private` firewall. The firewall has no inbound rules and permits required outbound traffic.
-4. Creates or reuses the regional `agent-home-<agent-name>` volume at the exact configured size.
-5. Creates an Ubuntu 24.04 Droplet with the generated public key, Tailscale enrollment, the unprivileged `agent` account, and rootless Podman prerequisites.
-6. Waits for OpenSSH over the selected Tailscale MagicDNS hostname.
-7. Mounts persistent state at `/agent-dirs/<agent-name>`, exposes it to Hermes as `/opt/data`, and starts the pinned Hermes image.
-8. Returns success only after the private Hermes gateway health endpoint responds.
+2. Validates and stages an optional state archive before provider inspection or mutation.
+3. Derives the public half of the bundle's generated Ed25519 identity.
+4. Creates or reconciles the managed `agentctl-v2` tag and the `agentctl-private` firewall. The firewall has no inbound rules and permits required outbound traffic.
+5. Creates or reuses the regional `agent-home-<agent-name>` volume at the exact configured size.
+6. Creates an Ubuntu 24.04 Droplet with the generated public key, Tailscale enrollment, the unprivileged `agent` account, and rootless Podman prerequisites.
+7. Waits for OpenSSH over the selected Tailscale MagicDNS hostname.
+8. Mounts persistent state at `/agent-dirs/<agent-name>`, optionally restores it, exposes it to Hermes as `/opt/data`, and starts the pinned Hermes image.
+9. Returns success only after the private Hermes gateway health endpoint responds.
 
 The generated SSH identity removes any requirement to select or register a DigitalOcean account SSH key. The Droplet's public IPv4 address is not used for normal access.
 
@@ -41,9 +42,29 @@ Running the same command again reuses one exact-name Droplet and volume, reconci
 
 Multiple exact-name Droplets or volumes fail safely. A volume in another region, at another size, or attached to another Droplet also fails rather than being selected or modified arbitrarily.
 
-The persistent `.env` under Hermes state is seeded only when empty. Existing Hermes settings remain authoritative on later runs. Launcher-owned networking and container settings are reconciled separately on every `up`.
+Existing non-empty values in the persistent `.env` remain authoritative on later runs. Bundle initial values fill only required settings that are missing or empty. Launcher-owned networking and container settings are reconciled separately on every `up`.
 
 Hermes starts in `/workdir`, and its canonical local terminal directory is pinned there through a read-only managed configuration layer. File and patch tools may write under `/opt/data` and `/workdir` while Hermes' protected credential-path denylist remains active. The selected runtime image must provide `podman-compose`; `up` verifies that contract before replacing the running Hermes container. See [Workspace and Compose](compose-workspace.md).
+
+## Restore initial Hermes state
+
+Supply a local archive only when `/opt/data` is fresh or empty:
+
+```bash
+./bin/agentctl agent up \
+  --file agents/sample-agent.agent.yml \
+  --state-archive recovery/hermes-state.tar
+```
+
+Relative paths resolve from the directory where `agentctl` is invoked. Archive entries are placed directly under `/opt/data`; do not add a required wrapper directory. A fresh ext4 filesystem's empty `lost+found` directory is ignored, but archives may not contain or target it.
+
+Before inspecting or changing provider resources, `up` copies the source into a mode-`0600` local temporary file and validates the exact copied bytes. Validation rejects malformed archives, absolute or parent-traversing paths, duplicate destinations, escaping links, devices, FIFOs, sockets, and other special entries. Safe regular files, directories, symbolic links, and hard links are supported. Executable modes remain usable; unsafe ownership and permission bits are discarded.
+
+The validated copy is transferred over SCP as another mode-`0600` temporary file. The host revalidates it, refuses a non-empty state target, stops an existing Hermes container if restoration can proceed, and extracts before `.env` seeding, launcher settings, or Hermes startup. A restored non-empty `.env` keeps its existing values; only missing or empty required initial settings are added from the bundle. Extraction and ownership-normalization failures remove partial restored content.
+
+Both temporary copies are removed after success or failure. Normal output never reports the archive path or entries. With `--verbose`, success may report only the source path, byte size, SHA-256 digest, and completed stage. Treat the source archive as secret-bearing data. State restoration requires local `python3`; Ubuntu host enrollment includes it.
+
+Restoration never merges into existing state. To restore an agent with retained state, use a different fresh agent/volume or deliberately remove the existing state through an out-of-band recovery procedure; `agentctl` has no destructive purge command.
 
 ## Credential boundaries
 
@@ -51,7 +72,7 @@ The Tailscale enrollment key is sent only through first-boot enrollment for a ne
 
 An optional registry token is streamed through SSH to host-side `podman login --password-stdin`. It is not placed in cloud-init, command arguments, the Hermes environment, or lifecycle output. Hermes API and dashboard credentials seed only persistent Hermes state.
 
-Local cloud-init, SSH identity, runtime-script, and secret-payload files use mode `0600` and are removed after success or failure. Remote temporary scripts and payloads remove themselves and are also cleaned up by `agentctl`.
+Local cloud-init, SSH identity, runtime-script, secret-payload, and optional state-archive copies use mode `0600` and are removed after success or failure. Remote temporary scripts, payloads, and archive copies remove themselves and are also cleaned up by `agentctl`.
 
 `/opt/data` is retained on the provider volume. `/workdir` remains part of disposable compute; commit and push work that must survive a future `down`.
 

@@ -55,6 +55,89 @@ class extends="testbox.system.BaseSpec" {
 				}
 			});
 
+			it("rejects an invalid state archive before provider inspection or mutation", () => {
+				var archive = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-invalid-state-", ".tar");
+				fileWrite(archive, "archive-private-marker");
+				var runner = scriptedRunner(providerState());
+				try {
+					expect(() => new src.services.UpService(runner, 1, 0).up(resolvedBundle("test-agent"), false, archive)).toThrow(
+						message="state archive contains unsafe or invalid entries"
+					);
+					expect(countCalls(runner.getCalls(), "doctl", "compute")).toBe(0);
+					expect(countCalls(runner.getCalls(), "ssh-keygen", "-y")).toBe(0);
+					for (var call in runner.getCalls()) expect(jsonSerialize(call.arguments)).notToInclude("archive-private-marker");
+				} finally {
+					if (fileExists(archive)) fileDelete(archive);
+				}
+			});
+
+			it("stages and transfers a state archive before seeding or Hermes startup", () => {
+				var archive = stateArchive();
+				var state = providerState();
+				var runner = scriptedRunner(state);
+				var service = new src.services.UpService(runner, 1, 0);
+				try {
+					var result = service.up(resolvedBundle("test-agent"), true, archive);
+					var output = service.format(result);
+					result.verbose = false;
+					var normalOutput = service.format(result);
+
+					expect(output).toInclude("State archive: restored before Hermes startup");
+					expect(output).toInclude(getCanonicalPath(archive));
+					expect(normalOutput).toInclude("State archive: restored before Hermes startup");
+					expect(normalOutput).notToInclude(getCanonicalPath(archive));
+					expect(normalOutput).notToInclude("State archive SHA-256:");
+					expect(output).toInclude("State archive SHA-256:");
+					expect(output).notToInclude("archive-private-marker");
+					expect(state.archivePath).notToBe(archive);
+					expect(state.archiveMode).toBe("600");
+					expect(state.archiveSize).toBeGT(0);
+					expect(fileExists(state.archivePath)).toBeFalse();
+					expect(state.remoteArchive).toMatch("^root@test-agent:/tmp/agentctl-[a-z0-9]+[.]tar$");
+					expect(state.remoteRemovals).toBe(3);
+					expect(state.runtimeArguments[arrayLen(state.runtimeArguments)]).toMatch("^/tmp/agentctl-[a-z0-9]+[.]tar$");
+					expect(state.runtimeScript).toInclude("python3 - extract");
+					expect(find("python3 - extract", state.runtimeScript)).toBeLT(find("env_tmp=$(mktemp", state.runtimeScript));
+					for (var call in runner.getCalls()) {
+						expect(jsonSerialize(call.arguments)).notToInclude("archive-private-marker");
+					}
+				} finally {
+					if (fileExists(archive)) fileDelete(archive);
+				}
+			});
+
+			it("reports a non-empty remote state target without leaking archive details", () => {
+				var archive = stateArchive();
+				var state = providerState({ runtimeExitCode : 44 });
+				var runner = scriptedRunner(state);
+				try {
+					expect(() => new src.services.UpService(runner, 1, 0).up(resolvedBundle("test-agent"), false, archive)).toThrow(
+						message="persistent state is not empty; state archive restore was refused"
+					);
+					expect(state.remoteRemovals).toBe(3);
+					expect(fileExists(state.archivePath)).toBeFalse();
+				} finally {
+					if (fileExists(archive)) fileDelete(archive);
+				}
+			});
+
+			it("cleans local and remote archive copies when transfer fails", () => {
+				var archive = stateArchive();
+				var state = providerState({ failArchiveTransfer : true });
+				var runner = scriptedRunner(state);
+				try {
+					expect(() => new src.services.UpService(runner, 1, 0).up(resolvedBundle("test-agent"), false, archive)).toThrow(
+						message="copying the state archive failed"
+					);
+					expect(state.archivePath).notToBe("");
+					expect(fileExists(state.archivePath)).toBeFalse();
+					expect(state.remoteRemovals).toBe(1);
+					expect(state.runtimeExecutions).toBe(0);
+				} finally {
+					if (fileExists(archive)) fileDelete(archive);
+				}
+			});
+
 			it("reuses one exact Droplet and volume while reinstalling the runtime", () => {
 				var state = providerState({
 					droplets : "101 test-agent",
@@ -156,12 +239,22 @@ class extends="testbox.system.BaseSpec" {
 				expect(state.remoteRemovals).toBe(2);
 			});
 
-			it("generates syntax-valid runtime Bash with seed-once and reconciled settings", () => {
+			it("generates syntax-valid runtime Bash with restore-aware seeding and reconciled settings", () => {
 				var script = new src.services.UpService(new FakeCommandRunner()).runtimeScript();
 				var syntax = systemExecute("bash", [ "-n", "-c", script ]);
 
 				expect(syntax.exitCode).toBe(0, syntax.error);
-				expect(script).toInclude("if [[ ! -s $env_file ]]");
+				expect(script).toInclude("if [[ -s $env_file ]]");
+				expect(script).toInclude('[[ -z $env_tmp ]] || rm -f -- "$env_tmp"');
+				expect(script).toInclude('grep -q "^${initial_key}=." "$env_tmp"');
+				expect(script).toInclude("persistent state is not empty; state archive restore was refused");
+				expect(script).toInclude("state archive extraction failed; partial restored state was removed");
+				expect(script).toInclude("Hermes .env must be a regular file");
+				expect(script).toInclude('find "$restore_target" -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf -- {} +');
+				expect(script).toInclude('chown -R "$agent_uid:$agent_gid" "$mount_dir"');
+				expect(script).toInclude('podman_as_agent unshare chown -R 10000:10000 "$mount_dir"');
+				expect(find("python3 - extract", script)).toBeLT(find("env_tmp=$(mktemp", script));
+				expect(find("env_tmp=$(mktemp", script)).toBeLT(find("/etc/agentctl/hermes-launcher.env", script));
 				expect(script).toInclude("/etc/agentctl/hermes-launcher.env");
 				expect(script).toInclude("HERMES_WRITE_SAFE_ROOT=/opt/data:/workdir");
 				expect(script).toInclude("HERMES_MANAGED_DIR=/etc/hermes");
@@ -226,6 +319,8 @@ class extends="testbox.system.BaseSpec" {
 			staleFirst : false,
 			passwordExpired : false,
 			failRuntime : false,
+			runtimeExitCode : 0,
+			failArchiveTransfer : false,
 			readinessCalls : 0,
 			runtimeExecutions : 0,
 			remoteRemovals : 0,
@@ -237,9 +332,14 @@ class extends="testbox.system.BaseSpec" {
 			payloadPath : "",
 			payloadMode : "",
 			payload : "",
+			archivePath : "",
+			archiveMode : "",
+			archiveSize : 0,
+			remoteArchive : "",
 			scriptPath : "",
 			scriptMode : "",
-			runtimeScript : ""
+			runtimeScript : "",
+			runtimeArguments : []
 		};
 		for (var key in structKeyArray(arguments.overrides)) state[key] = arguments.overrides[key];
 		return state;
@@ -247,6 +347,9 @@ class extends="testbox.system.BaseSpec" {
 
 	private function scriptedRunner(required struct state) {
 		var handler = (executable, commandArguments, input) => {
+			if (arguments.executable == "python3") {
+				return systemExecute(arguments.executable, arguments.commandArguments);
+			}
 			if (arguments.executable == "ssh-keygen") {
 				if (arguments.commandArguments[1] == "-y") {
 					state.identityPath = arguments.commandArguments[5];
@@ -274,7 +377,13 @@ class extends="testbox.system.BaseSpec" {
 			}
 			if (arguments.executable == "scp") {
 				var localPath = arguments.commandArguments[arrayLen(arguments.commandArguments) - 1];
-				if (right(localPath, 8) == ".payload") {
+				if (right(localPath, 4) == ".tar") {
+					state.archivePath = localPath;
+					state.archiveMode = fileMode(localPath);
+					state.archiveSize = getFileInfo(localPath).size;
+					state.remoteArchive = arguments.commandArguments[arrayLen(arguments.commandArguments)];
+					if (state.failArchiveTransfer) return failure("must-not-leak");
+				} else if (right(localPath, 8) == ".payload") {
 					state.payloadPath = localPath;
 					state.payloadMode = fileMode(localPath);
 					state.payload = fileRead(localPath);
@@ -300,6 +409,8 @@ class extends="testbox.system.BaseSpec" {
 				}
 				if (find("/bin/bash,/tmp/agentctl-", command) > 0) {
 					state.runtimeExecutions++;
+					state.runtimeArguments = arguments.commandArguments;
+					if (state.runtimeExitCode > 0) return { exitCode : state.runtimeExitCode, output : "", error : "must-not-leak", timeout : false };
 					return state.failRuntime ? failure("must-not-leak") : success("healthy");
 				}
 				if (find("/bin/rm,-f,--,/tmp/agentctl-", command) > 0) state.remoteRemovals++;
@@ -308,6 +419,20 @@ class extends="testbox.system.BaseSpec" {
 			return success();
 		};
 		return new FakeCommandRunner([], true, handler);
+	}
+
+	private function stateArchive() {
+		var source = createTempDirectory(getSystemSetting("TMPDIR", "/tmp"), "agentctl-state-source-");
+		var archive = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-state-input-", ".tar");
+		try {
+			fileWrite(source & "/.env", "ARCHIVE_PRIVATE_MARKER=archive-private-marker");
+			fileWrite(source & "/state.txt", "restored");
+			var result = systemExecute("tar", [ "-cf", archive, "-C", source, ".env", "state.txt" ]);
+			if (result.exitCode != 0) throw "could not create state archive fixture";
+			return archive;
+		} finally {
+			directoryDelete(source, true);
+		}
 	}
 
 	private function success(string output = "") {
