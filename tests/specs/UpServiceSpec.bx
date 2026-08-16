@@ -382,7 +382,7 @@ class extends="testbox.system.BaseSpec" {
 				expect(script).toInclude('"$agent_socket:/run/podman/podman.sock"');
 				expect(script).toInclude("/etc/agentctl/hermes-managed:/etc/hermes:ro");
 				expect(script).toInclude("podman-compose --version");
-				expect(script).toInclude("for ((attempt = 1; attempt <= 3; attempt++))");
+				expect(script).toInclude("for ((attempt = 1; attempt <= 6; attempt++))");
 				expect(script).toInclude("image_contract_ready=true");
 				expect(script).toInclude("hermes config get terminal.cwd");
 				expect(script).toInclude("as_agent() {");
