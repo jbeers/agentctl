@@ -43,16 +43,20 @@ class {
 			if (structKeyExists(result, "exitCode") && result.exitCode == 3) {
 				fail(type & " archive contains unsafe or invalid entries");
 			}
-			fail("could not prepare the " & type & " archive");
+			fail(type & " archive validation failed unexpectedly");
 		}
 
 		var metadata = {};
 		var metadataValid = false;
+		var metadataLineCount = 0;
+		var metadataSizeValid = false;
+		var metadataDigestValid = false;
 		try {
 			var metadataLines = listToArray(trim(result.output), char(10));
-			metadataValid = arrayLen(metadataLines) == 3 &&
-				isNumeric(metadataLines[2]) && metadataLines[2] >= 0 &&
-				arrayLen(reMatch("^[a-f0-9]{64}$", metadataLines[3])) > 0;
+			metadataLineCount = arrayLen(metadataLines);
+			if (metadataLineCount >= 2) metadataSizeValid = isNumeric(metadataLines[2]) && metadataLines[2] >= 0;
+			if (metadataLineCount >= 3) metadataDigestValid = len(metadataLines[3]) == 64 && arrayLen(reMatch("[^a-f0-9]", metadataLines[3])) == 0;
+			metadataValid = metadataLineCount == 3 && metadataSizeValid && metadataDigestValid;
 			if (metadataValid) {
 				metadata = {
 					source : metadataLines[1],
@@ -65,7 +69,7 @@ class {
 		}
 		if (!metadataValid) {
 			deleteTemporary(temporaryPath);
-			fail("could not prepare the " & type & " archive");
+			fail(type & " archive metadata could not be read");
 		}
 		return {
 			archiveType : type,
