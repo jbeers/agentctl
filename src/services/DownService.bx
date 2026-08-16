@@ -98,7 +98,7 @@ class {
 			'    agent_uid=$(id -u agent)',
 			'    agent_home=$(getent passwd agent | cut -d: -f6)',
 			'    podman_as_agent() {',
-			'      runuser -u agent -- env HOME="$agent_home" XDG_RUNTIME_DIR="/run/user/$agent_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$agent_uid/bus" podman "$@"',
+			'      (cd "$agent_home" && runuser -u agent -- env HOME="$agent_home" XDG_RUNTIME_DIR="/run/user/$agent_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$agent_uid/bus" podman "$@")',
 			'    }',
 			'    podman_status=0',
 			'    podman_as_agent container exists hermes >/dev/null 2>&1 || podman_status=$?',

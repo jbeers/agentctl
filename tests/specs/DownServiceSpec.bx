@@ -153,6 +153,7 @@ class extends="testbox.system.BaseSpec" {
 				expect(left(shutdown, 20)).toBe(char(35) & "!/usr/bin/env bash" & char(10));
 				expect(left(logout, 20)).toBe(char(35) & "!/usr/bin/env bash" & char(10));
 				expect(shutdown).toInclude("stop --time 60 hermes");
+				expect(shutdown).toInclude('cd "$agent_home" && runuser -u agent');
 				expect(shutdown).toInclude("sync || exit 21");
 				expect(shutdown).toInclude('umount "$mount_dir" || exit 22');
 				expect(find("stop --time 60 hermes", shutdown) < find("sync || exit 21", shutdown)).toBeTrue();

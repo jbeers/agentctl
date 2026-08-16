@@ -63,6 +63,7 @@ class extends="testbox.system.BaseSpec" {
 				expect(output).notToInclude("test-private-material");
 				expect(output).notToInclude("provider-secret-must-not-leak");
 				expect(systemExecute("bash", [ "-n", "-c", state.containerCommand ]).exitCode).toBe(0);
+				expect(state.containerCommand).toInclude('cd "$agent_home" && runuser -u agent');
 				expect(systemExecute("bash", [ "-n", "-c", state.gatewayCommand ]).exitCode).toBe(0);
 				expect(systemExecute("bash", [ "-n", "-c", state.dashboardCommand ]).exitCode).toBe(0);
 
