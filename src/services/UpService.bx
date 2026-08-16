@@ -335,7 +335,7 @@ class {
 			'env_tmp=$(mktemp "$mount_dir/.env.XXXXXX")',
 			'if [[ -s $env_file ]]; then',
 			'  cat -- "$env_file" > "$env_tmp"',
-			'  [[ $(tail -c 1 "$env_file" | wc -l) -gt 0 ]] || printf ''\n'' >> "$env_tmp"',
+			'  printf ''\n'' >> "$env_tmp"',
 			'fi',
 			'seed_setting() {',
 			'  local initial_key=$1',
@@ -349,7 +349,7 @@ class {
 			'mv "$env_tmp" "$env_file"',
 			'env_tmp=',
 			'for required_key in API_SERVER_KEY HERMES_DASHBOARD_BASIC_AUTH_USERNAME HERMES_DASHBOARD_BASIC_AUTH_PASSWORD HERMES_DASHBOARD_BASIC_AUTH_SECRET; do',
-			'  grep -q "^${required_key}=." "$env_file" || { printf ''agentctl runtime: required Hermes setting is missing\n'' >&2; exit 1; }',
+			'  grep -q "^${required_key}=." "$env_file" || { printf ''agentctl runtime: required Hermes setting is missing\n'' >&2; exit 69; }',
 			'done',
 			'install -d -m 0755 /etc/agentctl /etc/agentctl/hermes-managed',
 			'launcher_tmp=$(mktemp /etc/agentctl/hermes-launcher.XXXXXX)',
@@ -363,7 +363,7 @@ class {
 			'DOCKER_HOST=unix:///run/podman/podman.sock',
 			'EOF',
 			'chmod 0644 "$launcher_tmp"',
-			'mv "$launcher_tmp" /etc/agentctl/hermes-launcher.env',
+			'mv "$launcher_tmp" /etc/agentctl/hermes-launcher.env || exit 70',
 			'managed_tmp=$(mktemp /etc/agentctl/hermes-managed/config.XXXXXX)',
 			'cat > "$managed_tmp" <<''EOF''',
 			'terminal:',
@@ -371,7 +371,7 @@ class {
 			'  cwd: /workdir',
 			'EOF',
 			'chmod 0644 "$managed_tmp"',
-			'mv "$managed_tmp" /etc/agentctl/hermes-managed/config.yaml',
+			'mv "$managed_tmp" /etc/agentctl/hermes-managed/config.yaml || exit 70',
 			'tailscale_ip=$(tailscale ip -4)',
 			'tailscale_ip=${tailscale_ip%%$''\n''*}',
 			'[[ -n $tailscale_ip ]] || { printf ''agentctl runtime: no Tailscale IPv4 address is available\n'' >&2; exit 66; }',
@@ -665,7 +665,8 @@ class {
 				if (result.exitCode == 66) fail("agent host has no usable Tailscale IPv4 address");
 				if (result.exitCode == 67) fail("configuring the rootless Podman socket failed");
 				if (result.exitCode == 68) fail("normalizing rootless runtime ownership failed");
-				if (result.exitCode == 69) fail("runtime credential payload validation failed");
+				if (result.exitCode == 69) fail("runtime credential payload or required Hermes settings validation failed");
+				if (result.exitCode == 70) fail("writing managed Hermes runtime configuration failed");
 			}
 			requireSuccess(result, "reconciling the Hermes runtime and health endpoint");
 		} finally {

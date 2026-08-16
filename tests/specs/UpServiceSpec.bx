@@ -202,7 +202,8 @@ class extends="testbox.system.BaseSpec" {
 					{ code : 66, message : "agent host has no usable Tailscale IPv4 address" },
 					{ code : 67, message : "configuring the rootless Podman socket failed" },
 					{ code : 68, message : "normalizing rootless runtime ownership failed" },
-					{ code : 69, message : "runtime credential payload validation failed" }
+					{ code : 69, message : "runtime credential payload or required Hermes settings validation failed" },
+					{ code : 70, message : "writing managed Hermes runtime configuration failed" }
 				];
 				for (var failureCase in cases) {
 					var state = providerState({ runtimeExitCode : failureCase.code });
@@ -354,6 +355,8 @@ class extends="testbox.system.BaseSpec" {
 
 				expect(syntax.exitCode).toBe(0, syntax.error);
 				expect(script).toInclude("if [[ -s $env_file ]]");
+				expect(script).toInclude('printf ''\n'' >> "$env_tmp"');
+				expect(script).notToInclude("tail -c 1");
 				expect(script).toInclude('[[ -z $env_tmp ]] || rm -f -- "$env_tmp"');
 				expect(script).toInclude('grep -q "^${initial_key}=." "$env_tmp"');
 				expect(script).toInclude("persistent state is not empty; state archive restore was refused");
