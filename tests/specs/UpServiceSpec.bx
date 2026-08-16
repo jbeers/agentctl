@@ -215,7 +215,10 @@ class extends="testbox.system.BaseSpec" {
 
 			it("reports a non-empty remote state target without leaking archive details", () => {
 				var archive = stateArchive();
-				var state = providerState({ runtimeExitCode : 44 });
+				var state = providerState({
+					runtimeExitCode : 1,
+					runtimeOutput : "persistent state is not empty; must-not-leak"
+				});
 				var runner = scriptedRunner(state);
 				try {
 					expect(() => new src.services.UpService(runner, 1, 0).up(resolvedBundle("test-agent"), false, archive)).toThrow(
@@ -354,7 +357,7 @@ class extends="testbox.system.BaseSpec" {
 
 				expect(syntax.exitCode).toBe(0, syntax.error);
 				expect(script).toInclude("if [[ -s $env_file ]]");
-				expect(script).toInclude('printf ''\n'' >> "$env_tmp"');
+				expect(script).toInclude('printf "\n" >> "$env_tmp"');
 				expect(script).notToInclude("tail -c 1");
 				expect(script).toInclude('[[ -z $env_tmp ]] || rm -f -- "$env_tmp"');
 				expect(script).toInclude('grep -q "^${initial_key}=." "$env_tmp"');
@@ -382,7 +385,9 @@ class extends="testbox.system.BaseSpec" {
 				expect(script).toInclude("--volume /workdir:/workdir");
 				expect(script).toInclude('"$agent_socket:/run/podman/podman.sock"');
 				expect(script).toInclude("/etc/agentctl/hermes-managed:/etc/hermes:ro");
-				expect(script).toInclude("command -v podman-compose");
+				expect(script).toInclude('-c "command -v podman-compose >/dev/null"');
+				expect(script).toInclude("<<" & char(92) & "EOF");
+				expect(script).toInclude("<<" & char(92) & "PY");
 				expect(find("command -v podman-compose", script)).toBeGT(find("--name hermes", script));
 				expect(script).notToInclude("podman-compose --version");
 				expect(script).notToInclude("image_contract_ready");
@@ -447,6 +452,8 @@ class extends="testbox.system.BaseSpec" {
 			passwordExpired : false,
 			failRuntime : false,
 			runtimeExitCode : 0,
+			runtimeOutput : "",
+			runtimeError : "must-not-leak",
 			failArchiveTransfer : false,
 			readinessCalls : 0,
 			runtimeExecutions : 0,
@@ -550,7 +557,7 @@ class extends="testbox.system.BaseSpec" {
 				if (find("/bin/bash,/tmp/agentctl-", command) > 0) {
 					state.runtimeExecutions++;
 					state.runtimeArguments = arguments.commandArguments;
-					if (state.runtimeExitCode > 0) return { exitCode : state.runtimeExitCode, output : "", error : "must-not-leak", timeout : false };
+					if (state.runtimeExitCode > 0) return { exitCode : state.runtimeExitCode, output : state.runtimeOutput, error : state.runtimeError, timeout : false };
 					return state.failRuntime ? failure("must-not-leak") : success("healthy");
 				}
 				if (find("/bin/rm,-f,--,/tmp/agentctl-", command) > 0) state.remoteRemovals++;
