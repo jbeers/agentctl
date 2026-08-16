@@ -288,11 +288,11 @@ class {
 			'    runuser -u agent -- env HOME="$agent_home" XDG_RUNTIME_DIR="$agent_runtime_dir" DBUS_SESSION_BUS_ADDRESS="$agent_bus" "$@"',
 			'  )',
 			'}',
-			'as_agent systemctl --user daemon-reload',
-			'as_agent systemctl --user enable --now podman.socket',
-			'as_agent systemctl --user restart podman.socket',
+			'as_agent systemctl --user daemon-reload || exit 67',
+			'as_agent systemctl --user enable --now podman.socket || exit 67',
+			'as_agent systemctl --user restart podman.socket || exit 67',
 			'as_agent systemctl --user enable podman-restart.service >/dev/null 2>&1 || true',
-			'[[ -S $agent_socket && $(stat -c ''%a'' "$agent_socket") == 666 ]] || { printf ''agentctl runtime: rootless Podman socket was not created with the required mode\n'' >&2; exit 1; }',
+			'[[ -S $agent_socket && $(stat -c ''%a'' "$agent_socket") == 666 ]] || { printf ''agentctl runtime: rootless Podman socket was not created with the required mode\n'' >&2; exit 67; }',
 			'podman_as_agent() { as_agent podman "$@"; }',
 			'install -d -m 0750 -o "$agent_uid" -g "$agent_gid" "$mount_dir" /workdir',
 			'if [[ $state_archive != - ]]; then',
@@ -322,8 +322,8 @@ class {
 			'  workspace_restore_pending=true',
 			'  python3 - extract "$workspace_archive" /workdir <<''PY'' || { archive_status=$?; exit $((50 + archive_status)); }' & char(10) & archiveValidator & 'PY',
 			'fi',
-			'chown -R "$agent_uid:$agent_gid" "$mount_dir" /workdir',
-			'podman_as_agent unshare chown -R 10000:10000 "$mount_dir" /workdir',
+			'chown -R "$agent_uid:$agent_gid" "$mount_dir" /workdir || exit 68',
+			'podman_as_agent unshare find "$mount_dir" /workdir -depth -exec chown -h 10000:10000 -- {} + || exit 68',
 			'env_file="$mount_dir/.env"',
 			'if [[ -e $env_file || -L $env_file ]]; then',
 			'  [[ -f $env_file && ! -L $env_file ]] || { printf ''agentctl runtime: Hermes .env must be a regular file\n'' >&2; exit 1; }',
@@ -658,6 +658,8 @@ class {
 				if (result.exitCode == 64) fail("Hermes gateway did not become healthy");
 				if (result.exitCode == 65) fail("Hermes workspace and managed runtime contract verification failed");
 				if (result.exitCode == 66) fail("agent host has no usable Tailscale IPv4 address");
+				if (result.exitCode == 67) fail("configuring the rootless Podman socket failed");
+				if (result.exitCode == 68) fail("normalizing rootless runtime ownership failed");
 			}
 			requireSuccess(result, "reconciling the Hermes runtime and health endpoint");
 		} finally {

@@ -195,7 +195,9 @@ class extends="testbox.system.BaseSpec" {
 					{ code : 63, message : "starting the Hermes runtime container failed" },
 					{ code : 64, message : "Hermes gateway did not become healthy" },
 					{ code : 65, message : "Hermes workspace and managed runtime contract verification failed" },
-					{ code : 66, message : "agent host has no usable Tailscale IPv4 address" }
+					{ code : 66, message : "agent host has no usable Tailscale IPv4 address" },
+					{ code : 67, message : "configuring the rootless Podman socket failed" },
+					{ code : 68, message : "normalizing rootless runtime ownership failed" }
 				];
 				for (var failureCase in cases) {
 					var state = providerState({ runtimeExitCode : failureCase.code });
@@ -359,7 +361,7 @@ class extends="testbox.system.BaseSpec" {
 				expect(script).toInclude("state_restore_pending=true");
 				expect(script).toInclude("workspace_restore_pending=true");
 				expect(script).toInclude('chown -R "$agent_uid:$agent_gid" "$mount_dir"');
-				expect(script).toInclude('podman_as_agent unshare chown -R 10000:10000 "$mount_dir"');
+				expect(script).toInclude('podman_as_agent unshare find "$mount_dir" /workdir -depth -exec chown -h 10000:10000 -- {} +');
 				expect(find("python3 - extract", script)).toBeLT(find("env_tmp=$(mktemp", script));
 				expect(find('python3 - extract "$workspace_archive" /workdir', script)).toBeLT(find("podman-compose --version", script));
 				expect(find("env_tmp=$(mktemp", script)).toBeLT(find("/etc/agentctl/hermes-launcher.env", script));
