@@ -117,6 +117,32 @@ class extends="testbox.system.BaseSpec" {
 				expect(state.deletedId).toBe("");
 			});
 
+			it("allows teardown of a partially enrolled host before persistent state is mounted", () => {
+				var directory = createTempDirectory(getSystemSetting("TMPDIR", "/tmp"), "agentctl-down-partial-");
+				var marker = directory & "/podman-called";
+				try {
+					writeExecutable(directory & "/mountpoint", "##!/bin/sh" & char(10) & "exit 1" & char(10));
+					writeExecutable(directory & "/sync", "##!/bin/sh" & char(10) & "exit 0" & char(10));
+					writeExecutable(directory & "/podman", "##!/bin/sh" & char(10) & "touch " & marker & char(10) & "exit 125" & char(10));
+					var result = systemExecute(
+						"bash",
+						[ "-c", new src.services.DownService(new FakeCommandRunner(), 0).shutdownScript(), "/tmp/agentctl-down-partial.sh", "test-agent" ],
+						10,
+						true,
+						null,
+						null,
+						null,
+						true,
+						{ PATH : directory & ":" & getSystemSetting("PATH", "") }
+					);
+
+					expect(result.exitCode).toBe(0);
+					expect(fileExists(marker)).toBeFalse();
+				} finally {
+					if (directoryExists(directory)) directoryDelete(directory, true);
+				}
+			});
+
 			it("generates valid self-removing shutdown and logout Bash", () => {
 				var service = new src.services.DownService(new FakeCommandRunner(), 0);
 				var shutdown = service.shutdownScript();
@@ -270,6 +296,11 @@ class extends="testbox.system.BaseSpec" {
 
 	private function fileMode(required string path) {
 		return trim(systemExecute("stat", [ "-c", "%a", arguments.path ]).output);
+	}
+
+	private function writeExecutable(required string path, required string content) {
+		fileWrite(arguments.path, arguments.content);
+		fileSetAccessMode(arguments.path, "755");
 	}
 
 }

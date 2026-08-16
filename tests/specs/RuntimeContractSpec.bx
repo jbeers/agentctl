@@ -17,6 +17,13 @@ class extends="testbox.system.BaseSpec" {
 				expect(containerfile).notToInclude("--privileged");
 			});
 
+			it("keeps generated archive validation compatible with the native MatchBox runtime", () => {
+				var archiveService = fileRead(projectPath("src/services/ArchiveService.bx"));
+
+				expect(archiveService).notToInclude("arrayToList");
+				expect(new src.services.ArchiveService({}).validatorProgram()).toInclude("def extract_archive");
+			});
+
 			it("provides a Compose fixture that proves path parity and sibling health", () => {
 				var fixtureDirectory = projectPath("tests/fixtures/compose-workspace");
 				var compose = yamlDeserialize(fileRead(fixtureDirectory & "/compose.yaml"));

@@ -276,7 +276,11 @@ class {
 	}
 
 	private function linesToText(required array lines) {
-		return arrayToList(arguments.lines, char(10)) & char(10);
+		var text = "";
+		for (var index = 1; index <= arrayLen(arguments.lines); index++) {
+			text &= (index == 1 ? "" : char(10)) & arguments.lines[index];
+		}
+		return text & char(10);
 	}
 
 	private function fail(required string message) {
