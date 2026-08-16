@@ -395,9 +395,16 @@ class {
 			'  sleep 2',
 			'done',
 			'[[ $gateway_ready == true ]] || { printf ''agentctl runtime: Hermes gateway did not become ready\n'' >&2; exit 64; }',
-			'[[ $(podman_as_agent exec hermes hermes config get terminal.cwd) == /workdir ]] || { printf ''agentctl runtime: Hermes terminal working directory is not /workdir\n'' >&2; exit 65; }',
+			'runtime_contract_ready=false',
+			'for ((attempt = 1; attempt <= 15; attempt++)); do',
+			'  if [[ $(podman_as_agent exec hermes hermes config get terminal.cwd 2>/dev/null) == /workdir ]] && podman_as_agent exec hermes /bin/sh -c ''test "$PWD" = /workdir && test "$HERMES_WRITE_SAFE_ROOT" = /opt/data:/workdir && test "$CONTAINER_HOST" = unix:///run/podman/podman.sock && test "$DOCKER_HOST" = unix:///run/podman/podman.sock && test -S /run/podman/podman.sock''; then',
+			'    runtime_contract_ready=true',
+			'    break',
+			'  fi',
+			'  sleep 2',
+			'done',
+			'[[ $runtime_contract_ready == true ]] || { printf ''agentctl runtime: Hermes workspace/managed runtime contract is not satisfied\n'' >&2; exit 65; }',
 			'podman_as_agent exec hermes /bin/sh -c ''command -v podman-compose >/dev/null'' || { printf ''agentctl runtime: selected image lacks the required podman-compose client\n'' >&2; exit 62; }',
-			'podman_as_agent exec hermes /bin/sh -c ''test "$PWD" = /workdir && test "$HERMES_WRITE_SAFE_ROOT" = /opt/data:/workdir && test "$CONTAINER_HOST" = unix:///run/podman/podman.sock && test "$DOCKER_HOST" = unix:///run/podman/podman.sock && test -S /run/podman/podman.sock'' || { printf ''agentctl runtime: Hermes workspace/Compose contract is not satisfied\n'' >&2; exit 65; }',
 			'printf ''Hermes gateway and workspace/Compose contract are healthy\n'''
 		]);
 	}

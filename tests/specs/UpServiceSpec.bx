@@ -388,6 +388,8 @@ class extends="testbox.system.BaseSpec" {
 				expect(script).notToInclude("podman-compose --version");
 				expect(script).notToInclude("image_contract_ready");
 				expect(script).toInclude("hermes config get terminal.cwd");
+				expect(script).toInclude("for ((attempt = 1; attempt <= 15; attempt++))");
+				expect(script).toInclude("runtime_contract_ready=true");
 				expect(script).toInclude("as_agent() {");
 				expect(script).toInclude('cd "$agent_home"');
 				expect(find('cd "$agent_home"', script)).toBeLT(find("as_agent systemctl --user daemon-reload", script));
