@@ -370,6 +370,8 @@ class extends="testbox.system.BaseSpec" {
 				expect(script).toInclude("workspace_restore_pending=true");
 				expect(script).toInclude('chown -R "$agent_uid:$agent_gid" "$mount_dir"');
 				expect(script).toInclude('podman_as_agent unshare find "$mount_dir" /workdir -depth -exec chown -h 10000:10000 -- {} +');
+				expect(find('mv "$env_tmp" "$env_file"', script)).toBeLT(find('chown -R "$agent_uid:$agent_gid" "$mount_dir" /workdir || exit 68', script));
+				expect(find('chown -R "$agent_uid:$agent_gid" "$mount_dir" /workdir || exit 68', script)).toBeLT(find("--name hermes", script));
 				expect(find("python3 - extract", script)).toBeLT(find("env_tmp=$(mktemp", script));
 				expect(find('python3 - extract "$workspace_archive" /workdir', script)).toBeLT(find("--name hermes", script));
 				expect(find("env_tmp=$(mktemp", script)).toBeLT(find("/etc/agentctl/hermes-launcher.env", script));
