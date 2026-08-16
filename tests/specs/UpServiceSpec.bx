@@ -371,7 +371,7 @@ class extends="testbox.system.BaseSpec" {
 				expect(script).toInclude('chown -R "$agent_uid:$agent_gid" "$mount_dir"');
 				expect(script).toInclude('podman_as_agent unshare find "$mount_dir" /workdir -depth -exec chown -h 10000:10000 -- {} +');
 				expect(find("python3 - extract", script)).toBeLT(find("env_tmp=$(mktemp", script));
-				expect(find('python3 - extract "$workspace_archive" /workdir', script)).toBeLT(find("podman-compose --version", script));
+				expect(find('python3 - extract "$workspace_archive" /workdir', script)).toBeLT(find("--name hermes", script));
 				expect(find("env_tmp=$(mktemp", script)).toBeLT(find("/etc/agentctl/hermes-launcher.env", script));
 				expect(script).toInclude("/etc/agentctl/hermes-launcher.env");
 				expect(script).toInclude("HERMES_WRITE_SAFE_ROOT=/opt/data:/workdir");
@@ -381,9 +381,10 @@ class extends="testbox.system.BaseSpec" {
 				expect(script).toInclude("--volume /workdir:/workdir");
 				expect(script).toInclude('"$agent_socket:/run/podman/podman.sock"');
 				expect(script).toInclude("/etc/agentctl/hermes-managed:/etc/hermes:ro");
-				expect(script).toInclude("podman-compose --version");
-				expect(script).toInclude("for ((attempt = 1; attempt <= 6; attempt++))");
-				expect(script).toInclude("image_contract_ready=true");
+				expect(script).toInclude("command -v podman-compose");
+				expect(find("command -v podman-compose", script)).toBeGT(find("--name hermes", script));
+				expect(script).notToInclude("podman-compose --version");
+				expect(script).notToInclude("image_contract_ready");
 				expect(script).toInclude("hermes config get terminal.cwd");
 				expect(script).toInclude("as_agent() {");
 				expect(script).toInclude('cd "$agent_home"');
