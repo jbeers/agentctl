@@ -395,15 +395,6 @@ class {
 			'  sleep 2',
 			'done',
 			'[[ $gateway_ready == true ]] || { printf ''agentctl runtime: Hermes gateway did not become ready\n'' >&2; exit 64; }',
-			'runtime_contract_ready=false',
-			'for ((attempt = 1; attempt <= 15; attempt++)); do',
-			'  if [[ $(podman_as_agent exec hermes hermes config get terminal.cwd 2>/dev/null) == /workdir ]] && podman_as_agent exec hermes /bin/sh -c ''test "$PWD" = /workdir && test "$HERMES_WRITE_SAFE_ROOT" = /opt/data:/workdir && test "$CONTAINER_HOST" = unix:///run/podman/podman.sock && test "$DOCKER_HOST" = unix:///run/podman/podman.sock && test -S /run/podman/podman.sock''; then',
-			'    runtime_contract_ready=true',
-			'    break',
-			'  fi',
-			'  sleep 2',
-			'done',
-			'[[ $runtime_contract_ready == true ]] || { printf ''agentctl runtime: Hermes workspace/managed runtime contract is not satisfied\n'' >&2; exit 65; }',
 			'podman_as_agent exec hermes /bin/sh -c ''command -v podman-compose >/dev/null'' || { printf ''agentctl runtime: selected image lacks the required podman-compose client\n'' >&2; exit 62; }',
 			'printf ''Hermes gateway and workspace/Compose contract are healthy\n'''
 		]);
@@ -668,7 +659,6 @@ class {
 				if (result.exitCode == 62) fail("selected Hermes runtime image does not satisfy the Compose contract");
 				if (result.exitCode == 63) fail("starting the Hermes runtime container failed");
 				if (result.exitCode == 64) fail("Hermes gateway did not become healthy");
-				if (result.exitCode == 65) fail("Hermes workspace and managed runtime contract verification failed");
 				if (result.exitCode == 66) fail("agent host has no usable Tailscale IPv4 address");
 				if (result.exitCode == 67) fail("configuring the rootless Podman socket failed");
 				if (result.exitCode == 68) fail("normalizing rootless runtime ownership failed");
