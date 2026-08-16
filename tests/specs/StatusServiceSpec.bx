@@ -1,0 +1,271 @@
+import tests.support.FakeCommandRunner;
+
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("StatusService", () => {
+			it("reports absent without materializing an identity or checking deeper layers", () => {
+				var state = statusState({ droplets : "" });
+				var runner = scriptedRunner(state);
+				var service = new src.services.StatusService(runner);
+				var result = service.check(resolvedBundle("test-agent"));
+				var output = service.format(result);
+
+				expect(result.state).toBe("absent");
+				expect(service.exitCode(result)).toBe(1);
+				expect(result.compute).toBe("absent");
+				expect(result.volume).toBe("not checked");
+				expect(result.access).toBe("not checked");
+				expect(output).toInclude("Agent 'test-agent': absent");
+				expect(output).toInclude("Repository readiness: Hermes-owned; not checked by agentctl");
+				expect(state.events).toBe([ "droplet" ]);
+				expect(state.identityPath).toBe("");
+				expect(runner.getAvailabilityChecks()).toBe([ "doctl" ]);
+			});
+
+			it("distinguishes provider provisioning and inactive compute without remote checks", () => {
+				var provisioningState = statusState({ droplets : "101 test-agent new" });
+				var provisioningService = new src.services.StatusService(scriptedRunner(provisioningState));
+				var provisioning = provisioningService.check(resolvedBundle("test-agent"));
+				expect(provisioning.state).toBe("provisioning");
+				expect(provisioning.compute).toBe("new (Droplet 101)");
+				expect(provisioningState.events).toBe([ "droplet" ]);
+				expect(provisioningService.exitCode(provisioning)).toBe(1);
+
+				var inactiveState = statusState({ droplets : "101 test-agent off" });
+				var inactive = new src.services.StatusService(scriptedRunner(inactiveState)).check(resolvedBundle("test-agent"));
+				expect(inactive.state).toBe("unhealthy");
+				expect(inactive.compute).toBe("off (Droplet 101)");
+				expect(inactiveState.events).toBe([ "droplet" ]);
+			});
+
+			it("reports every healthy layer as ready through private routes", () => {
+				var state = statusState();
+				var runner = scriptedRunner(state);
+				var service = new src.services.StatusService(runner);
+				var resolved = resolvedBundle("test-agent", "test-agent-1");
+				var result = service.check(resolved, true);
+				var output = service.format(result);
+
+				expect(result.state).toBe("ready");
+				expect(service.exitCode(result)).toBe(0);
+				expect(result.compute).toBe("active (Droplet 101)");
+				expect(result.volume).toBe("attached (agent-home-test-agent, vol-101)");
+				expect(result.access).toBe("reachable");
+				expect(result.container).toBe("running");
+				expect(result.gateway).toBe("healthy");
+				expect(result.dashboard).toBe("healthy");
+				expect(state.events).toBe([ "droplet", "volume", "attachment", "access", "container", "gateway", "dashboard" ]);
+				expect(state.identityMode).toBe("600");
+				expect(fileExists(state.identityPath)).toBeFalse();
+				expect(output).toInclude("Tailscale hostname: test-agent-1");
+				expect(output).toInclude("Status checks: read-only over DigitalOcean and private Tailscale routes");
+				expect(output).notToInclude("test-private-material");
+				expect(output).notToInclude("provider-secret-must-not-leak");
+				expect(systemExecute("bash", [ "-n", "-c", state.containerCommand ]).exitCode).toBe(0);
+				expect(systemExecute("bash", [ "-n", "-c", state.gatewayCommand ]).exitCode).toBe(0);
+				expect(systemExecute("bash", [ "-n", "-c", state.dashboardCommand ]).exitCode).toBe(0);
+
+				for (var call in runner.getCalls()) {
+					var argv = jsonSerialize(call.arguments);
+					var input = isNull(call.input) ? "" : toString(call.input);
+					expect(argv & input).notToInclude("test-private-material");
+					expect(argv & input).notToInclude("provider-secret-must-not-leak");
+					expect(argv).notToInclude("PublicIPv4");
+					if (call.executable == "doctl") {
+						expect(argv).notToMatch("create|delete|update|attach|apply");
+					}
+					if (call.executable == "ssh") {
+						expect(call.arguments).toInclude("StrictHostKeyChecking=yes");
+						expect(call.arguments).notToInclude("StrictHostKeyChecking=accept-new");
+						if (!isNull(call.input)) expect(call.arguments[arrayLen(call.arguments)]).toBe("-s");
+					}
+				}
+				expect(runner.getAvailabilityChecks()).notToInclude("scp");
+			});
+
+			it("short-circuits at unhealthy volume, container, gateway, and dashboard layers", () => {
+				var missingVolumeState = statusState({ volumes : "" });
+				var missingVolume = new src.services.StatusService(scriptedRunner(missingVolumeState)).check(resolvedBundle("test-agent"));
+				expect(missingVolume.state).toBe("unhealthy");
+				expect(missingVolume.volume).toBe("missing (agent-home-test-agent)");
+				expect(missingVolumeState.events).toBe([ "droplet", "volume" ]);
+
+				var detachedState = statusState({ attached : "" });
+				var detached = new src.services.StatusService(scriptedRunner(detachedState)).check(resolvedBundle("test-agent"));
+				expect(detached.volume).toBe("not attached to Droplet 101");
+				expect(detachedState.events).toBe([ "droplet", "volume", "attachment" ]);
+
+				var containerState = statusState({ containerStatus : "exited" });
+				var container = new src.services.StatusService(scriptedRunner(containerState)).check(resolvedBundle("test-agent"));
+				expect(container.container).toBe("exited");
+				expect(container.gateway).toBe("not checked");
+				expect(containerState.events).toBe([ "droplet", "volume", "attachment", "access", "container" ]);
+
+				var gatewayState = statusState({ gatewayFailure : true });
+				var gateway = new src.services.StatusService(scriptedRunner(gatewayState)).check(resolvedBundle("test-agent"));
+				expect(gateway.gateway).toBe("unhealthy");
+				expect(gateway.dashboard).toBe("not checked");
+				expect(gatewayState.events).notToInclude("dashboard");
+
+				var dashboardState = statusState({ dashboardFailure : true });
+				var dashboard = new src.services.StatusService(scriptedRunner(dashboardState)).check(resolvedBundle("test-agent"));
+				expect(dashboard.dashboard).toBe("unhealthy");
+				expect(dashboard.state).toBe("unhealthy");
+				expect(fileExists(dashboardState.identityPath)).toBeFalse();
+			});
+
+			it("reports access boundaries without replacing mismatched host keys or leaking errors", () => {
+				var mismatchState = statusState({ hostMismatch : true });
+				var mismatchRunner = scriptedRunner(mismatchState);
+				var mismatch = new src.services.StatusService(mismatchRunner).check(resolvedBundle("test-agent"));
+				expect(mismatch.state).toBe("unhealthy");
+				expect(mismatch.access).toBe("host key mismatch; run agent up to verify and reconcile the disposable host");
+				expect(mismatch.container).toBe("not checked");
+				expect(fileExists(mismatchState.identityPath)).toBeFalse();
+				for (var call in mismatchRunner.getCalls()) {
+					expect(arrayToList(call.arguments, ",")).notToInclude("-R,test-agent");
+					expect(jsonSerialize(call.arguments)).notToInclude("access-secret-must-not-leak");
+				}
+
+				var tailscaleState = statusState({ tailscaleFailure : true });
+				var tailscale = new src.services.StatusService(scriptedRunner(tailscaleState)).check(resolvedBundle("test-agent"));
+				expect(tailscale.access).toBe("SSH reachable; Tailscale unhealthy");
+				expect(tailscaleState.events).toBe([ "droplet", "volume", "attachment", "access" ]);
+			});
+
+			it("distinguishes provider failure and invalid local access configuration from absence", () => {
+				var providerState = statusState({ providerFailure : true });
+				expect(() => new src.services.StatusService(scriptedRunner(providerState)).check(resolvedBundle("test-agent"))).toThrow(
+					message="DigitalOcean API failure while listing Droplets; agent status is indeterminate"
+				);
+				expect(providerState.events).toBe([ "droplet" ]);
+
+				expect(() => new src.services.StatusService(
+					new FakeCommandRunner([], { doctl : false })
+				).check(resolvedBundle("test-agent"))).toThrow(
+					message="doctl is required to check agent status"
+				);
+
+				var missingSshState = statusState({ sshAvailable : false });
+				var missingSsh = new src.services.StatusService(scriptedRunner(missingSshState)).check(resolvedBundle("test-agent"));
+				expect(missingSsh.access).toBe("unavailable: local ssh is not installed");
+				expect(missingSsh.state).toBe("unhealthy");
+				expect(missingSshState.identityPath).toBe("");
+
+				var invalidKeyState = statusState({ invalidKey : true });
+				var invalidKey = new src.services.StatusService(scriptedRunner(invalidKeyState)).check(resolvedBundle("test-agent"));
+				expect(invalidKey.access).toBe("unavailable: agent SSH private key is invalid or passphrase-protected");
+				expect(fileExists(invalidKeyState.identityPath)).toBeFalse();
+			});
+		});
+	}
+
+	private function resolvedBundle(required string name, string hostname = "") {
+		var plan = new src.services.BundleService().parse(
+			{ version : 2, identity : { name : arguments.name } },
+			arguments.hostname == "" ? {} : { hostname : arguments.hostname }
+		);
+		return {
+			plan : plan,
+			secretValues : {
+				sshPrivateKey : "-----BEGIN OPENSSH PRIVATE KEY-----" & char(10) &
+					"test-private-material" & char(10) &
+					"-----END OPENSSH PRIVATE KEY-----" & char(10)
+			}
+		};
+	}
+
+	private function statusState(struct overrides = {}) {
+		var state = {
+			droplets : "101 test-agent active",
+			volumes : "vol-101 agent-home-test-agent nyc3 10",
+			attached : "101",
+			providerFailure : false,
+			sshAvailable : true,
+			keygenAvailable : true,
+			invalidKey : false,
+			hostMismatch : false,
+			tailscaleFailure : false,
+			containerStatus : "running",
+			gatewayFailure : false,
+			dashboardFailure : false,
+			events : [],
+			identityPath : "",
+			identityMode : "",
+			containerCommand : "",
+			gatewayCommand : "",
+			dashboardCommand : ""
+		};
+		for (var key in structKeyArray(arguments.overrides)) state[key] = arguments.overrides[key];
+		return state;
+	}
+
+	private function scriptedRunner(required struct state) {
+		var handler = (executable, commandArguments, input) => {
+			var command = arrayToList(arguments.commandArguments, ",");
+			var script = isNull(arguments.input) ? "" : toString(arguments.input);
+			if (arguments.executable == "doctl") {
+				if (find("droplet,list", command) > 0) {
+					arrayAppend(state.events, "droplet");
+					return state.providerFailure ? failure(1, "provider-secret-must-not-leak") : success(state.droplets);
+				}
+				if (find("volume,list", command) > 0) {
+					arrayAppend(state.events, "volume");
+					return success(state.volumes);
+				}
+				if (find("volume,get", command) > 0) {
+					arrayAppend(state.events, "attachment");
+					return success(state.attached);
+				}
+			}
+			if (arguments.executable == "ssh-keygen") {
+				state.identityPath = arguments.commandArguments[5];
+				state.identityMode = fileMode(state.identityPath);
+				return state.invalidKey ? failure(1, "key-secret-must-not-leak") : success("ssh-ed25519 AAAATESTPUBLIC agentctl:test-agent");
+			}
+			if (arguments.executable == "ssh") {
+				if (find("tailscale,status", command) > 0) {
+					arrayAppend(state.events, "access");
+					if (state.hostMismatch) return failure(255, "REMOTE HOST IDENTIFICATION HAS CHANGED access-secret-must-not-leak");
+					if (state.tailscaleFailure) return failure(1, "access-secret-must-not-leak");
+					return success();
+				}
+				if (find("container inspect", script) > 0) {
+					arrayAppend(state.events, "container");
+					state.containerCommand = script;
+					return success(state.containerStatus);
+				}
+				if (find(":8642/health", script) > 0) {
+					arrayAppend(state.events, "gateway");
+					state.gatewayCommand = script;
+					return state.gatewayFailure ? failure(22, "gateway-secret-must-not-leak") : success();
+				}
+				if (find(":9119/", script) > 0) {
+					arrayAppend(state.events, "dashboard");
+					state.dashboardCommand = script;
+					return state.dashboardFailure ? failure(23, "dashboard-secret-must-not-leak") : success();
+				}
+			}
+			return success();
+		};
+		return new FakeCommandRunner(
+			[],
+			{ doctl : true, ssh : state.sshAvailable, "ssh-keygen" : state.keygenAvailable },
+			handler
+		);
+	}
+
+	private function success(string output = "") {
+		return { exitCode : 0, output : arguments.output, error : "", timeout : false };
+	}
+
+	private function failure(required numeric exitCode, string error = "failed") {
+		return { exitCode : arguments.exitCode, output : "", error : arguments.error, timeout : false };
+	}
+
+	private function fileMode(required string path) {
+		return trim(systemExecute("stat", [ "-c", "%a", arguments.path ]).output);
+	}
+
+}

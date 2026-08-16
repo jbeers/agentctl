@@ -90,6 +90,6 @@ Local cloud-init, SSH identity, runtime-script, secret-payload, and optional sta
 
 `/opt/data` is retained on the provider volume. `/workdir` remains part of disposable compute; commit and push work that must survive a future `down`.
 
-## Access the running agent
+## Check and access the running agent
 
-After `up` succeeds, `agent ssh` opens an interactive root repair session over Tailscale and `agent open` launches the private Hermes dashboard. See [Access a running agent](agent-access.md).
+After `up` succeeds, `agent status` reports each readiness layer, `agent ssh` opens an interactive root repair session over Tailscale, and `agent open` launches the private Hermes dashboard. See [Check layered agent health](agent-status.md) and [Access a running agent](agent-access.md).

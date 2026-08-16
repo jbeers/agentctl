@@ -127,6 +127,26 @@ class extends="testbox.system.BaseSpec" {
 				}).error).toBe("unknown option '--region' for agent open");
 			});
 
+			it("parses status with an explicit bundle and hostname override", () => {
+				var result = parser.parse({
+					positionals : [ "agent", "status" ],
+					options : { file : "agent.yml", hostname : "test-agent-1", verbose : true }
+				});
+
+				expect(result.valid).toBeTrue();
+				expect(result.action).toBe("status");
+				expect(result.overrides.hostname).toBe("test-agent-1");
+				expect(result.verbose).toBeTrue();
+				expect(parser.parse({
+					positionals : [ "agent", "status" ],
+					options : {}
+				}).error).toBe("agent status requires '--file'");
+				expect(parser.parse({
+					positionals : [ "agent", "status" ],
+					options : { file : "agent.yml", size : "s-2vcpu-4gb" }
+				}).error).toBe("unknown option '--size' for agent status");
+			});
+
 			it("parses ssh with an explicit bundle and hostname override", () => {
 				var result = parser.parse({
 					positionals : [ "agent", "ssh" ],
@@ -208,9 +228,9 @@ class extends="testbox.system.BaseSpec" {
 
 			it("rejects unknown commands, options, values, and extra arguments", () => {
 				expect(parser.parse({
-					positionals : [ "agent", "status" ],
+					positionals : [ "agent", "unknown" ],
 					options : { file : "agent.yml" }
-				}).valid).toBeFalse();
+				}).error).toBe("unknown agent command 'unknown'");
 				expect(parser.parse({
 					positionals : [ "agent", "inspect" ],
 					options : { file : "agent.yml", nmae : "typo" }

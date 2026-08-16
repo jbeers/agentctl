@@ -1,0 +1,318 @@
+class {
+
+	function init(required any commandRunner) {
+		variables.runner = arguments.commandRunner;
+		variables.identities = new src.services.SshIdentityService(arguments.commandRunner);
+		return this;
+	}
+
+	function check(required struct resolved, boolean verbose = false) {
+		validateResolved(arguments.resolved);
+		if (!variables.runner.isAvailable("doctl")) fail("doctl is required to check agent status");
+
+		var plan = arguments.resolved.plan;
+		var result = baseResult(plan, arguments.verbose);
+		var droplet = findDroplet(plan.values.name.value);
+		if (!droplet.exists) {
+			result.state = "absent";
+			result.compute = "absent";
+			return result;
+		}
+
+		result.compute = droplet.status & " (Droplet " & droplet.id & ")";
+		if (droplet.status == "new") {
+			result.state = "provisioning";
+			return result;
+		}
+		if (droplet.status != "active") return result;
+
+		var volumeName = plan.derived.volumeName;
+		var volume = findVolume(volumeName);
+		if (!volume.exists) {
+			result.volume = "missing (" & volumeName & ")";
+			return result;
+		}
+		var expectedSize = replace(plan.values.stateSize.value, "GiB", "", "all");
+		if (volume.region != plan.values.region.value || volume.size != expectedSize) {
+			result.volume = "configuration mismatch (" & volumeName & ")";
+			return result;
+		}
+		var attachedIds = volumeAttachmentIds(volume.id);
+		if (arrayLen(attachedIds) != 1 || attachedIds[1] != droplet.id) {
+			result.volume = arrayLen(attachedIds) == 0 ?
+				"not attached to Droplet " & droplet.id :
+				"attached to another Droplet";
+			return result;
+		}
+		result.volume = "attached (" & volumeName & ", " & volume.id & ")";
+
+		if (!variables.runner.isAvailable("ssh")) {
+			result.access = "unavailable: local ssh is not installed";
+			return result;
+		}
+		if (!variables.runner.isAvailable("ssh-keygen")) {
+			result.access = "unavailable: local ssh-keygen is not installed";
+			return result;
+		}
+		if (
+			!structKeyExists(arguments.resolved.secretValues, "sshPrivateKey") ||
+			arguments.resolved.secretValues.sshPrivateKey == ""
+		) {
+			result.access = "unavailable: bundle SSH credential is missing";
+			return result;
+		}
+
+		var identity = {};
+		try {
+			try {
+				identity = variables.identities.prepare(
+					arguments.resolved.secretValues.sshPrivateKey,
+					"agentctl-status-ssh-"
+				);
+			} catch (error) {
+				result.access = "unavailable: agent SSH private key is invalid or passphrase-protected";
+				return result;
+			}
+
+			var access = executeSsh(identity.path, result.hostname, [ "tailscale", "status" ]);
+			if (!succeeded(access)) {
+				result.access = isTransportFailure(access) ? accessFailure(access) : "SSH reachable; Tailscale unhealthy";
+				return result;
+			}
+			result.access = "reachable";
+
+			var container = executeSsh(identity.path, result.hostname, [ "/bin/bash", "-s" ], containerStatusCommand());
+			if (!succeeded(container)) {
+				if (isTransportFailure(container)) result.access = accessFailure(container);
+				result.container = isTransportFailure(container) ? "not checked" : "unavailable";
+				return result;
+			}
+			result.container = containerState(container);
+			if (result.container != "running") return result;
+
+			var gateway = executeSsh(identity.path, result.hostname, [ "/bin/bash", "-s" ], healthCommand(8642, "/health"));
+			if (!succeeded(gateway)) {
+				if (isTransportFailure(gateway)) result.access = accessFailure(gateway);
+				result.gateway = isTransportFailure(gateway) ? "not checked" : "unhealthy";
+				return result;
+			}
+			result.gateway = "healthy";
+
+			var dashboard = executeSsh(identity.path, result.hostname, [ "/bin/bash", "-s" ], healthCommand(9119, "/"));
+			if (!succeeded(dashboard)) {
+				if (isTransportFailure(dashboard)) result.access = accessFailure(dashboard);
+				result.dashboard = isTransportFailure(dashboard) ? "not checked" : "unhealthy";
+				return result;
+			}
+			result.dashboard = "healthy";
+			result.state = "ready";
+			result.ready = true;
+			return result;
+		} finally {
+			if (!structIsEmpty(identity)) variables.identities.remove(identity.path);
+		}
+	}
+
+	function format(required struct result) {
+		var lines = [
+			"Agent '" & arguments.result.name & "': " & arguments.result.state,
+			"  Compute: " & arguments.result.compute,
+			"  Tailscale hostname: " & arguments.result.hostname,
+			"  Working volume: " & arguments.result.volume,
+			"  SSH/Tailscale: " & arguments.result.access,
+			"  Hermes container: " & arguments.result.container,
+			"  Gateway health: " & arguments.result.gateway,
+			"  Dashboard health: " & arguments.result.dashboard
+		];
+		if (arguments.result.verbose) {
+			arrayAppend(lines, "  Status checks: read-only over DigitalOcean and private Tailscale routes");
+		}
+		arrayAppend(lines, "  Repository readiness: Hermes-owned; not checked by agentctl");
+		return joinValues(lines, char(10));
+	}
+
+	function exitCode(required struct result) {
+		return arguments.result.ready ? 0 : 1;
+	}
+
+	private function baseResult(required struct plan, required boolean verbose) {
+		return {
+			name : arguments.plan.values.name.value,
+			hostname : arguments.plan.values.hostname.value,
+			state : "unhealthy",
+			ready : false,
+			compute : "not checked",
+			volume : "not checked",
+			access : "not checked",
+			container : "not checked",
+			gateway : "not checked",
+			dashboard : "not checked",
+			verbose : arguments.verbose
+		};
+	}
+
+	private function findDroplet(required string name) {
+		var response = runDoctl(
+			[ "compute", "droplet", "list", "--format", "ID,Name,Status", "--no-header" ],
+			"listing Droplets"
+		);
+		var matches = [];
+		for (var row in parseRows(response.output, 3)) {
+			if (row[2] == arguments.name) arrayAppend(matches, row);
+		}
+		if (arrayLen(matches) > 1) fail("multiple exact-name Droplets exist; agent status is indeterminate");
+		if (arrayLen(matches) == 0) return { exists : false };
+		return { exists : true, id : matches[1][1], status : lCase(matches[1][3]) };
+	}
+
+	private function findVolume(required string name) {
+		var response = runDoctl(
+			[ "compute", "volume", "list", "--format", "ID,Name,Region,Size", "--no-header" ],
+			"listing volumes"
+		);
+		var matches = [];
+		for (var row in parseRows(response.output, 4)) {
+			if (row[2] == arguments.name) arrayAppend(matches, row);
+		}
+		if (arrayLen(matches) > 1) fail("multiple exact-name volumes exist; agent status is indeterminate");
+		if (arrayLen(matches) == 0) return { exists : false };
+		return {
+			exists : true,
+			id : matches[1][1],
+			region : matches[1][3],
+			size : matches[1][4]
+		};
+	}
+
+	private function volumeAttachmentIds(required string volumeId) {
+		var response = runDoctl(
+			[ "compute", "volume", "get", arguments.volumeId, "--format", "DropletIDs", "--no-header" ],
+			"checking volume attachment"
+		);
+		var output = trim(response.output);
+		var ids = reMatch("[0-9]+", output);
+		if (output != "" && arrayLen(ids) == 0) fail("could not parse the DigitalOcean volume attachment state");
+		return ids;
+	}
+
+	private function executeSsh(
+		required string identityPath,
+		required string hostname,
+		required array remoteArguments,
+		any input = null
+	) {
+		var commandArguments = [
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=10",
+			"-o", "StrictHostKeyChecking=yes",
+			"-o", "IdentitiesOnly=yes",
+			"-i", arguments.identityPath,
+			"root@" & arguments.hostname
+		];
+		for (var value in arguments.remoteArguments) arrayAppend(commandArguments, value);
+		try {
+			return variables.runner.run(
+				"ssh",
+				commandArguments,
+				15,
+				true,
+				null,
+				null,
+				null,
+				true,
+				{},
+				false,
+				arguments.input
+			);
+		} catch (error) {
+			return { exitCode : -1, output : "", error : "", timeout : false };
+		}
+	}
+
+	private function containerStatusCommand() {
+		return 'agent_uid=$(id -u agent) && agent_home=$(getent passwd agent | cut -d: -f6) && ' &
+			'runuser -u agent -- env HOME="$agent_home" XDG_RUNTIME_DIR="/run/user/$agent_uid" ' &
+			'DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$agent_uid/bus" ' &
+			'podman container inspect --format "{{.State.Status}}" hermes';
+	}
+
+	private function healthCommand(required numeric port, required string path) {
+		return 'tailscale_ip=$(tailscale ip -4 | head -n 1) && [[ -n $tailscale_ip ]] && ' &
+			'curl --fail --silent --show-error --max-time 5 "http://$tailscale_ip:' & arguments.port & arguments.path & '" >/dev/null';
+	}
+
+	private function containerState(required struct response) {
+		if (!structKeyExists(arguments.response, "output") || isNull(arguments.response.output)) return "unknown";
+		var state = lCase(trim(arguments.response.output));
+		return listFind("created,restarting,running,removing,paused,exited,dead,configured,stopping", state) > 0 ? state : "unknown";
+	}
+
+	private function accessFailure(required struct response) {
+		var errorText = structKeyExists(arguments.response, "error") && !isNull(arguments.response.error) && isSimpleValue(arguments.response.error) ? uCase(toString(arguments.response.error)) : "";
+		if (find("REMOTE HOST IDENTIFICATION HAS CHANGED", errorText) > 0 || find("HOST KEY VERIFICATION FAILED", errorText) > 0) {
+			return "host key mismatch; run agent up to verify and reconcile the disposable host";
+		}
+		if (structKeyExists(arguments.response, "timeout") && arguments.response.timeout) return "unreachable over Tailscale: SSH check timed out";
+		return "unreachable over Tailscale";
+	}
+
+	private function isTransportFailure(required struct response) {
+		if (structKeyExists(arguments.response, "timeout") && arguments.response.timeout) return true;
+		if (!structKeyExists(arguments.response, "exitCode") || isNull(arguments.response.exitCode)) return true;
+		return arguments.response.exitCode == -1 || arguments.response.exitCode == 255;
+	}
+
+	private function runDoctl(required array commandArguments, required string label) {
+		var response = {};
+		try {
+			response = variables.runner.run("doctl", arguments.commandArguments);
+		} catch (error) {
+			fail("DigitalOcean API failure while " & arguments.label & "; agent status is indeterminate");
+		}
+		if (!succeeded(response)) fail("DigitalOcean API failure while " & arguments.label & "; agent status is indeterminate");
+		return response;
+	}
+
+	private function parseRows(required string output, required numeric columns) {
+		var rows = [];
+		var text = trim(replace(arguments.output, char(13), "", "all"));
+		if (text == "") return rows;
+		for (var line in listToArray(text, char(10), false, true)) {
+			var tokens = reMatch("[^[:space:]]+", line);
+			if (arrayLen(tokens) < arguments.columns) fail("could not parse a DigitalOcean response");
+			arrayAppend(rows, tokens);
+		}
+		return rows;
+	}
+
+	private function succeeded(required struct response) {
+		return structKeyExists(arguments.response, "exitCode") &&
+			!isNull(arguments.response.exitCode) &&
+			arguments.response.exitCode == 0 &&
+			(!structKeyExists(arguments.response, "timeout") || !arguments.response.timeout);
+	}
+
+	private function validateResolved(required struct resolved) {
+		if (!structKeyExists(arguments.resolved, "plan") || !structKeyExists(arguments.resolved, "secretValues")) {
+			fail("resolved agent bundle is invalid");
+		}
+		var plan = arguments.resolved.plan;
+		if (plan.values.computeProvider.value != "digitalocean") fail("agent status requires the digitalocean compute provider");
+		if (plan.values.stateStrategy.value != "provider-volume") fail("agent status requires provider-volume working state");
+		if (plan.values.accessMethod.value != "openssh-over-tailscale") fail("agent status requires OpenSSH over Tailscale");
+		if (trim(plan.values.hostname.value) == "") fail("agent bundle is missing a Tailscale hostname");
+	}
+
+	private function joinValues(required array values, required string delimiter) {
+		var result = "";
+		for (var index = 1; index <= arrayLen(arguments.values); index++) {
+			result &= (index == 1 ? "" : arguments.delimiter) & arguments.values[index];
+		}
+		return result;
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}

@@ -6,6 +6,7 @@ import src.services.DownService;
 import src.services.InitService;
 import src.services.OpenService;
 import src.services.SshService;
+import src.services.StatusService;
 import src.services.UpService;
 
 function usage(boolean errorStream = false) {
@@ -18,6 +19,7 @@ function usage(boolean errorStream = false) {
 		"  agentctl agent inspect --file <bundle> [options]",
 		"  agentctl agent doctor --file <bundle> [--verbose]",
 		"  agentctl agent up --file <bundle> [options]",
+		"  agentctl agent status --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
 		"  agentctl agent open --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
 		"  agentctl agent ssh --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
 		"  agentctl agent down --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
@@ -147,6 +149,12 @@ try {
 		);
 		systemOutput(up.format(result), true);
 		exit(0);
+	}
+	if (command.action == "status") {
+		status = new StatusService(runner);
+		result = status.check(bundles.resolveForUse(command.file, command.overrides), command.verbose);
+		systemOutput(status.format(result), true, !result.ready);
+		exit(status.exitCode(result));
 	}
 	if (command.action == "open") {
 		opener = new OpenService(runner);
