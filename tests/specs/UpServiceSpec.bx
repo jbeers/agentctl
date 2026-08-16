@@ -187,6 +187,25 @@ class extends="testbox.system.BaseSpec" {
 				}
 			});
 
+			it("maps remote runtime failures to focused secret-safe stages", () => {
+				var cases = [
+					{ code : 60, message : "host registry login failed; verify the registry pull credential" },
+					{ code : 61, message : "pulling the selected Hermes runtime image failed" },
+					{ code : 62, message : "selected Hermes runtime image does not satisfy the Compose contract" },
+					{ code : 63, message : "starting the Hermes runtime container failed" },
+					{ code : 64, message : "Hermes gateway did not become healthy" },
+					{ code : 65, message : "Hermes workspace and managed runtime contract verification failed" },
+					{ code : 66, message : "agent host has no usable Tailscale IPv4 address" }
+				];
+				for (var failureCase in cases) {
+					var state = providerState({ runtimeExitCode : failureCase.code });
+					expect(() => new src.services.UpService(scriptedRunner(state), 1, 0).up(resolvedBundle("test-agent"))).toThrow(
+						message=failureCase.message
+					);
+					expect(fileExists(state.identityPath)).toBeFalse();
+				}
+			});
+
 			it("reports a non-empty remote state target without leaking archive details", () => {
 				var archive = stateArchive();
 				var state = providerState({ runtimeExitCode : 44 });

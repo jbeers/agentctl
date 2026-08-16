@@ -369,18 +369,18 @@ class {
 			'mv "$managed_tmp" /etc/agentctl/hermes-managed/config.yaml',
 			'tailscale_ip=$(tailscale ip -4)',
 			'tailscale_ip=${tailscale_ip%%$''\n''*}',
-			'[[ -n $tailscale_ip ]] || { printf ''agentctl runtime: no Tailscale IPv4 address is available\n'' >&2; exit 1; }',
+			'[[ -n $tailscale_ip ]] || { printf ''agentctl runtime: no Tailscale IPv4 address is available\n'' >&2; exit 66; }',
 			'if [[ -n $registry_token ]]; then',
-			'  [[ $registry != - && $registry_username != - ]] || { printf ''agentctl runtime: registry settings are invalid\n'' >&2; exit 1; }',
-			'  printf ''%s'' "$registry_token" | podman_as_agent login --username "$registry_username" --password-stdin "$registry"',
+			'  [[ $registry != - && $registry_username != - ]] || { printf ''agentctl runtime: registry settings are invalid\n'' >&2; exit 60; }',
+			'  printf ''%s'' "$registry_token" | podman_as_agent login --username "$registry_username" --password-stdin "$registry" || exit 60',
 			'fi',
 			'unset registry_token',
-			'podman_as_agent pull "$hermes_image"',
-			'podman_as_agent run --rm --entrypoint /bin/sh "$hermes_image" -c ''command -v podman-compose >/dev/null && podman-compose --version >/dev/null'' || { printf ''agentctl runtime: selected image lacks the required podman-compose client\n'' >&2; exit 1; }',
+			'podman_as_agent pull "$hermes_image" || exit 61',
+			'podman_as_agent run --rm --entrypoint /bin/sh "$hermes_image" -c ''command -v podman-compose >/dev/null && podman-compose --version >/dev/null'' || { printf ''agentctl runtime: selected image lacks the required podman-compose client\n'' >&2; exit 62; }',
 			'if podman_as_agent container inspect hermes >/dev/null 2>&1; then',
 			'  podman_as_agent rm --force hermes',
 			'fi',
-			'podman_as_agent run --detach --name hermes --restart unless-stopped --security-opt label=disable --shm-size 1g --log-opt max-size=10m --log-opt max-file=3 --workdir /workdir --env-file /etc/agentctl/hermes-launcher.env --publish "$tailscale_ip:8642:8642" --publish "$tailscale_ip:9119:9119" --volume "$agent_socket:/run/podman/podman.sock" --volume "$mount_dir:/opt/data" --volume /workdir:/workdir --volume /etc/agentctl/hermes-managed:/etc/hermes:ro "$hermes_image" gateway run',
+			'podman_as_agent run --detach --name hermes --restart unless-stopped --security-opt label=disable --shm-size 1g --log-opt max-size=10m --log-opt max-file=3 --workdir /workdir --env-file /etc/agentctl/hermes-launcher.env --publish "$tailscale_ip:8642:8642" --publish "$tailscale_ip:9119:9119" --volume "$agent_socket:/run/podman/podman.sock" --volume "$mount_dir:/opt/data" --volume /workdir:/workdir --volume /etc/agentctl/hermes-managed:/etc/hermes:ro "$hermes_image" gateway run || exit 63',
 			'gateway_ready=false',
 			'for ((attempt = 1; attempt <= 60; attempt++)); do',
 			'  podman_as_agent exec hermes hermes gateway start >/dev/null 2>&1 || true',
@@ -390,9 +390,9 @@ class {
 			'  fi',
 			'  sleep 2',
 			'done',
-			'[[ $gateway_ready == true ]] || { printf ''agentctl runtime: Hermes gateway did not become ready\n'' >&2; exit 1; }',
-			'[[ $(podman_as_agent exec hermes hermes config get terminal.cwd) == /workdir ]] || { printf ''agentctl runtime: Hermes terminal working directory is not /workdir\n'' >&2; exit 1; }',
-			'podman_as_agent exec hermes /bin/sh -c ''test "$PWD" = /workdir && test "$HERMES_WRITE_SAFE_ROOT" = /opt/data:/workdir && test "$CONTAINER_HOST" = unix:///run/podman/podman.sock && test "$DOCKER_HOST" = unix:///run/podman/podman.sock && test -S /run/podman/podman.sock && command -v podman-compose >/dev/null'' || { printf ''agentctl runtime: Hermes workspace/Compose contract is not satisfied\n'' >&2; exit 1; }',
+			'[[ $gateway_ready == true ]] || { printf ''agentctl runtime: Hermes gateway did not become ready\n'' >&2; exit 64; }',
+			'[[ $(podman_as_agent exec hermes hermes config get terminal.cwd) == /workdir ]] || { printf ''agentctl runtime: Hermes terminal working directory is not /workdir\n'' >&2; exit 65; }',
+			'podman_as_agent exec hermes /bin/sh -c ''test "$PWD" = /workdir && test "$HERMES_WRITE_SAFE_ROOT" = /opt/data:/workdir && test "$CONTAINER_HOST" = unix:///run/podman/podman.sock && test "$DOCKER_HOST" = unix:///run/podman/podman.sock && test -S /run/podman/podman.sock && command -v podman-compose >/dev/null'' || { printf ''agentctl runtime: Hermes workspace/Compose contract is not satisfied\n'' >&2; exit 65; }',
 			'printf ''Hermes gateway and workspace/Compose contract are healthy\n'''
 		]);
 	}
@@ -651,6 +651,13 @@ class {
 				if (hasWorkspaceArchive && result.exitCode == 54) fail("workspace is not empty; workspace archive seeding was refused");
 				if (hasWorkspaceArchive && result.exitCode == 55) fail("workspace archive extraction failed; restored archive content was removed and Hermes startup was blocked");
 				if (hasWorkspaceArchive && result.exitCode == 56) fail("workspace archive seeding failed before Hermes startup");
+				if (result.exitCode == 60) fail("host registry login failed; verify the registry pull credential");
+				if (result.exitCode == 61) fail("pulling the selected Hermes runtime image failed");
+				if (result.exitCode == 62) fail("selected Hermes runtime image does not satisfy the Compose contract");
+				if (result.exitCode == 63) fail("starting the Hermes runtime container failed");
+				if (result.exitCode == 64) fail("Hermes gateway did not become healthy");
+				if (result.exitCode == 65) fail("Hermes workspace and managed runtime contract verification failed");
+				if (result.exitCode == 66) fail("agent host has no usable Tailscale IPv4 address");
 			}
 			requireSuccess(result, "reconciling the Hermes runtime and health endpoint");
 		} finally {
