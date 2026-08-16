@@ -330,6 +330,7 @@ class {
 			'fi',
 			'state_restore_pending=false',
 			'workspace_restore_pending=false',
+			'[[ $(wc -l < "$payload") == 5 ]] || exit 69',
 			'IFS= read -r registry_token < "$payload" || true',
 			'env_tmp=$(mktemp "$mount_dir/.env.XXXXXX")',
 			'if [[ -s $env_file ]]; then',
@@ -660,6 +661,7 @@ class {
 				if (result.exitCode == 66) fail("agent host has no usable Tailscale IPv4 address");
 				if (result.exitCode == 67) fail("configuring the rootless Podman socket failed");
 				if (result.exitCode == 68) fail("normalizing rootless runtime ownership failed");
+				if (result.exitCode == 69) fail("runtime credential payload validation failed");
 			}
 			requireSuccess(result, "reconciling the Hermes runtime and health endpoint");
 		} finally {
@@ -673,11 +675,13 @@ class {
 	}
 
 	private function runtimePayload(required struct plan, required struct secrets) {
-		return arguments.secrets.registryToken & char(10) &
-			"API_SERVER_KEY=" & arguments.secrets.apiServerKey & char(10) &
-			"HERMES_DASHBOARD_BASIC_AUTH_USERNAME=" & arguments.plan.values.dashboardUsername.value & char(10) &
-			"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=" & arguments.secrets.dashboardPassword & char(10) &
-			"HERMES_DASHBOARD_BASIC_AUTH_SECRET=" & arguments.secrets.dashboardSecret & char(10);
+		return joinValues([
+			arguments.secrets.registryToken,
+			"API_SERVER_KEY=" & arguments.secrets.apiServerKey,
+			"HERMES_DASHBOARD_BASIC_AUTH_USERNAME=" & arguments.plan.values.dashboardUsername.value,
+			"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=" & arguments.secrets.dashboardPassword,
+			"HERMES_DASHBOARD_BASIC_AUTH_SECRET=" & arguments.secrets.dashboardSecret
+		], char(10)) & char(10);
 	}
 
 	private function registrySettings(required string image, required string token) {

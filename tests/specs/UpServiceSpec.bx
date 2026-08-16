@@ -27,6 +27,10 @@ class extends="testbox.system.BaseSpec" {
 				expect(state.cloudInit).notToInclude("test-private-material");
 				expect(state.payload).toInclude("registry-secret");
 				expect(state.payload).toInclude("API_SERVER_KEY=api-secret");
+				expect(state.payload).toInclude("HERMES_DASHBOARD_BASIC_AUTH_USERNAME=operator");
+				expect(state.payload).toInclude("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=dashboard-secret");
+				expect(state.payload).toInclude("HERMES_DASHBOARD_BASIC_AUTH_SECRET=signing-secret");
+				expect(listLen(state.payload, char(10))).toBe(5);
 				expect(state.payload).notToInclude("tskey-auth-test-up");
 				expect(state.payload).notToInclude("test-private-material");
 				expect(state.runtimeScript).notToInclude("telegram");
@@ -197,7 +201,8 @@ class extends="testbox.system.BaseSpec" {
 					{ code : 65, message : "Hermes workspace and managed runtime contract verification failed" },
 					{ code : 66, message : "agent host has no usable Tailscale IPv4 address" },
 					{ code : 67, message : "configuring the rootless Podman socket failed" },
-					{ code : 68, message : "normalizing rootless runtime ownership failed" }
+					{ code : 68, message : "normalizing rootless runtime ownership failed" },
+					{ code : 69, message : "runtime credential payload validation failed" }
 				];
 				for (var failureCase in cases) {
 					var state = providerState({ runtimeExitCode : failureCase.code });
