@@ -5,7 +5,7 @@ After `agent up` succeeds, use the bundle's effective Tailscale MagicDNS hostnam
 ## Open an SSH repair session
 
 ```bash
-./bin/agentctl agent ssh --file agents/sample-agent.agent.yml
+agentctl agent ssh --file agents/sample-agent.agent.yml
 ```
 
 `ssh` opens an interactive `root@<tailscale-hostname>` OpenSSH session with terminal input and output attached directly. Root is the supported host-repair account because the agent's public key is enrolled there during `up`. Hermes itself continues to run as the unprivileged `agent` user; `agentctl` does not grant Hermes broad host `sudo` access.
@@ -17,7 +17,7 @@ SSH accepts a previously unseen host key but refuses a changed known-host key. `
 A hostname override is available for an intentional temporary MagicDNS collision:
 
 ```bash
-./bin/agentctl agent ssh \
+agentctl agent ssh \
   --file agents/sample-agent.agent.yml \
   --hostname sample-agent-1
 ```
@@ -25,7 +25,7 @@ A hostname override is available for an intentional temporary MagicDNS collision
 ## Open the Hermes dashboard
 
 ```bash
-./bin/agentctl agent open --file agents/sample-agent.agent.yml
+agentctl agent open --file agents/sample-agent.agent.yml
 ```
 
 `open` launches `http://<tailscale-hostname>:9119` with `xdg-open` on Linux or `open` on macOS. It does not put dashboard credentials in the URL or browser command. Sign in through the Hermes UI.
@@ -33,7 +33,7 @@ A hostname override is available for an intentional temporary MagicDNS collision
 The same hostname override is supported:
 
 ```bash
-./bin/agentctl agent open \
+agentctl agent open \
   --file agents/sample-agent.agent.yml \
   --hostname sample-agent-1
 ```

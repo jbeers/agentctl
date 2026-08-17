@@ -3,8 +3,8 @@
 `agent up` creates or reconciles the private DigitalOcean resources described by one explicit V2 bundle:
 
 ```bash
-./bin/agentctl agent doctor --file agents/sample-agent.agent.yml
-./bin/agentctl agent up --file agents/sample-agent.agent.yml
+agentctl agent doctor --file agents/sample-agent.agent.yml
+agentctl agent up --file agents/sample-agent.agent.yml
 ```
 
 This command can create billable resources. Authenticate `doctl` normally before running it, and ensure the operator machine can resolve and reach the selected Tailscale hostname. Provider credentials, the local age identity, and local Tailscale credentials remain on the operator machine.
@@ -12,7 +12,7 @@ This command can create billable resources. Authenticate `doctl` normally before
 The same public overrides accepted by inspection are available per invocation:
 
 ```bash
-./bin/agentctl agent up \
+agentctl agent up \
   --file agents/sample-agent.agent.yml \
   --region fra1 \
   --size s-2vcpu-4gb \
@@ -50,37 +50,9 @@ Hermes starts in `/workdir`, and its canonical local terminal directory is pinne
 
 ## Restore state and seed the workspace
 
-Supply local archives only when their destinations are fresh or empty:
+`up` can restore a validated state archive into fresh `/opt/data`, seed a validated project archive into fresh `/workdir`, or perform both checks and extractions before Hermes starts. Restoration never merges with existing content, and every archive is treated as secret-bearing.
 
-```bash
-# Restore durable Hermes state into /opt/data
-./bin/agentctl agent up \
-  --file agents/sample-agent.agent.yml \
-  --state-archive recovery/hermes-state.tar
-
-# Seed disposable project files into /workdir
-./bin/agentctl agent up \
-  --file agents/sample-agent.agent.yml \
-  --workspace-archive recovery/workspace.tar
-
-# Restore both in one operation
-./bin/agentctl agent up \
-  --file agents/sample-agent.agent.yml \
-  --state-archive recovery/hermes-state.tar \
-  --workspace-archive recovery/workspace.tar
-```
-
-Relative paths resolve from the directory where `agentctl` is invoked. State entries are placed directly under `/opt/data`, and workspace entries directly under `/workdir`; neither archive requires a wrapper directory. A fresh ext4 state filesystem's empty `lost+found` directory is ignored, but archives may not contain or target it.
-
-Before inspecting or changing provider resources, `up` copies each source into a separate mode-`0600` local temporary file and validates the exact copied bytes with the same format rules. Validation rejects malformed archives, absolute or parent-traversing paths, duplicate destinations, escaping links, devices, FIFOs, sockets, and other special entries. Safe regular files, directories, symbolic links, and hard links are supported. Executable modes remain usable; unsafe ownership and permission bits are discarded.
-
-Validated copies are transferred over SCP as mode-`0600` temporary files and revalidated on the host. All requested destinations are checked before extraction. A non-empty target fails rather than merging, skipping, or overwriting files. Extraction and ownership normalization finish before `.env` seeding, Compose inspection, or Hermes startup. If either requested extraction fails, Hermes remains stopped and content extracted by the same operation is removed from both targets.
-
-A restored non-empty state `.env` keeps its existing values; only missing or empty required initial settings are added from the bundle. Workspace seeding does not inspect or change Git remotes, branches, credentials, commits, or dirty state. `/workdir` remains disposable after seeding, so commit and push work that must survive `down`.
-
-All temporary copies are removed after success or failure. Normal output reports stages and workspace disposability, never archive paths or entries. With `--verbose`, success may additionally report each source path, byte size, and SHA-256 digest. Treat both sources as secret-bearing data. Archive use requires local `python3`; Ubuntu host enrollment includes it.
-
-Restoration never merges into an existing target. To restore retained state, use a different fresh agent/volume or deliberately remove existing state through an out-of-band recovery procedure; `agentctl` has no destructive purge command.
+See [Restore state and seed a workspace](archives.md) for the complete format, validation, empty-target, cleanup, and persistence contract.
 
 ## Credential boundaries
 

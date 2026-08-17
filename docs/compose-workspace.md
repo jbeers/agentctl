@@ -2,7 +2,7 @@
 
 Hermes works from `/workdir`, which is the same absolute path on the VM host and inside the Hermes container. The directory is writable by Hermes but lives on disposable Droplet storage. Commit and push work that must survive `agent down`.
 
-Seed a fresh workspace before Hermes starts with `agent up --workspace-archive <tar-path>`. The archive extracts directly under empty `/workdir`; it is never merged into existing files. `agentctl` does not inspect or alter Git metadata in the archive, and seeding does not make the workspace persistent. See [Bring up an agent](agent-up.md#restore-state-and-seed-the-workspace).
+Seed a fresh workspace before Hermes starts with `agent up --workspace-archive <tar-path>`. The archive extracts directly under empty `/workdir`; it is never merged into existing files. `agentctl` does not inspect or alter Git metadata in the archive, and seeding does not make the workspace persistent. See [Restore state and seed a workspace](archives.md).
 
 The launcher enforces these deployment-owned settings on every `agent up`:
 
@@ -39,8 +39,9 @@ Copy `tests/fixtures/compose-workspace` into `/workdir` or use it as a model for
 
 ```bash
 cd /workdir/compose-workspace
-podman-compose --project-name agentctl-check up --detach --wait
-curl --fail http://host.containers.internal:18080/known.txt
+podman-compose --project-name agentctl-check up --detach
+curl --fail --retry 15 --retry-delay 2 --retry-connrefused \
+  http://host.containers.internal:18080/known.txt
 ```
 
 The response is:
@@ -54,7 +55,8 @@ The fixture's `${COMPOSE_WORKSPACE_PATH:-.}:/workspace:ro` bind defaults to rela
 From the operator machine, the sibling service is reachable privately through MagicDNS:
 
 ```bash
-curl --fail http://<agent-hostname>:18080/known.txt
+curl --fail --retry 15 --retry-delay 2 --retry-connrefused \
+  http://<agent-hostname>:18080/known.txt
 ```
 
 The managed DigitalOcean firewall has no public inbound rules, so the same port must not be reachable through the Droplet's public IPv4 address.

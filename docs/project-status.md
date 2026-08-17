@@ -1,6 +1,6 @@
 # Project status and limitations
 
-`agentctl` is currently a **public alpha**. The V2 lifecycle and cold-rebuild acceptance are complete, and verified Linux `amd64` executable and Hermes runtime artifacts are public. Clean-room onboarding and the project website are still roadmap work.
+`agentctl` is currently a **public alpha**. The V2 lifecycle and cold-rebuild acceptance are complete, verified Linux `amd64` executable and Hermes runtime artifacts are public, and the published-artifact first-agent guide has passed an operator-approved clean-room exercise. The documentation website is being launched from that proven Markdown.
 
 ## What is proven
 
@@ -17,7 +17,7 @@ The completed implementation can:
 - Stop Hermes, flush and unmount state, delete compute, and retain the provider volume.
 - Rebuild disposable compute while preserving `/opt/data` and discarding `/workdir`.
 
-These paths passed deterministic tests and an operator-approved live DigitalOcean/Tailscale exercise without manual VM repair.
+These paths passed deterministic tests, the V2 live DigitalOcean/Tailscale exercise, and a separate clean-room exercise using only the public `v0.1.0-alpha.2` release and public runtime. No VM received manual repair.
 
 ## Current supported boundary
 
@@ -49,7 +49,7 @@ Removing the local `agentctl` executable or encrypted bundle does not remove pro
 
 ## Roadmaps
 
-- [Completed V2 lifecycle](../v2/README.md)
-- [Public product roadmap](../v3/README.md)
+- [Completed V2 lifecycle](https://github.com/jbeers/agentctl/blob/main/v2/README.md)
+- [Public product roadmap](https://github.com/jbeers/agentctl/blob/main/v3/README.md)
 
-Remaining public-alpha work adds clean-room onboarding, the documentation website, credential rotation, state export, guarded purge, and JSON status.
+Remaining public-alpha work launches the documentation website and adds credential rotation, state export, guarded purge, and JSON status.

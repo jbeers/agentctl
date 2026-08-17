@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo"
+
+version=$(jq -er '.version' box.json)
+release="v$version"
+test -s "docs/releases/$release.md"
+grep -Fq "version=$version" docs/install.md
+grep -Fq "$release" docs/releases/index.md
+
+default_image=$(grep -o 'ghcr.io/jbeers/agentctl@sha256:[0-9a-f]\{64\}' src/services/BundleService.bx)
+test "$(printf '%s\n' "$default_image" | wc -l)" -eq 1
+for page in docs/agent-bundles.md docs/compose-workspace.md; do
+  grep -Fq "$default_image" "$page"
+done
+
+if rg -n 'CURRENT_RELEASE|RELEASE_VERSION|CURRENT_RUNTIME_DIGEST|TODO:.*release' docs README.md; then
+  printf 'unresolved release placeholder found\n' >&2
+  exit 1
+fi
+
+python - <<'PY'
+from pathlib import Path
+import re
+import subprocess
+import textwrap
+
+fences = re.compile(r"(?ms)^(?P<indent>[ \\t]*)```bash[ \\t]*\\n(?P<body>.*?)^(?P=indent)```[ \\t]*$")
+for path in sorted(Path("docs").rglob("*.md")):
+    for number, match in enumerate(fences.finditer(path.read_text()), 1):
+        result = subprocess.run(
+            ["bash", "-n"], input=textwrap.dedent(match.group("body")), text=True, capture_output=True
+        )
+        if result.returncode:
+            raise SystemExit(f"{path}: invalid Bash block {number}: {result.stderr}")
+PY
+
+site_dir=${1:-site}
+rm -rf "$site_dir"
+python -m mkdocs build --strict --site-dir "$site_dir"

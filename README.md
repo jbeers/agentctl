@@ -1,65 +1,36 @@
 # agentctl
 
-`agentctl` provisions disposable Hermes coding agents. The completed V2 lifecycle initializes, inspects, diagnoses, brings up, accesses, and safely takes down a private Hermes VM from one portable encrypted bundle.
+`agentctl` provisions private, disposable Hermes coding agents on DigitalOcean from one explicit SOPS-encrypted bundle.
 
-> **Status: public alpha.** The V2 lifecycle has passed live cold-rebuild acceptance, with verified public Linux `amd64` executable and Hermes runtime artifacts. Clean-room onboarding remains roadmap work. Review [current support and limitations](docs/project-status.md) before creating billable resources.
+> **Public alpha:** Linux `amd64`, DigitalOcean, Tailscale private access, Hermes, and rootless Podman are the supported boundary. There is no hosted service or public application ingress.
 
-`down` deletes compute and `/workdir` but intentionally retains the billable provider volume containing `/opt/data`. That volume is working state, not an independent backup.
+## Get started
 
-## Install
-
-The first supported operator target is Linux `amd64`. See [download, checksum verification, installation, upgrade, and uninstall](docs/install.md). Existing version 2 bundles remain compatible with application releases.
-
-## Build from source and test
-
-Requirements: BoxLang, CommandBox, and the local or installed MatchBox compiler.
+- [Documentation website](https://jbeers.github.io/agentctl/)
+- [Prerequisites and cost model](https://jbeers.github.io/agentctl/prerequisites/)
+- [Download and verify the Linux release](https://jbeers.github.io/agentctl/install/)
+- [Create a first agent and clean it up](https://jbeers.github.io/agentctl/first-agent/)
+- [Security model](https://jbeers.github.io/agentctl/security/)
 
 ```bash
-box install
-box run-script test
-box run-script build
+agentctl agent init
+agentctl agent inspect --file agents/sample-agent.agent.yml
+agentctl agent doctor --file agents/sample-agent.agent.yml
+agentctl agent up --file agents/sample-agent.agent.yml
+agentctl agent status --file agents/sample-agent.agent.yml
+agentctl agent open --file agents/sample-agent.agent.yml
+agentctl agent down --file agents/sample-agent.agent.yml
 ```
 
-The native executable is written to `bin/agentctl`.
+`up` can create billable compute and storage. `down` deletes the Droplet and disposable `/workdir`, but intentionally retains the billable volume containing `/opt/data`. That volume is working state, not an independent backup.
 
-## Initialize and inspect a bundle
+## Contribute
 
-Run argument-free initialization for an interactive wizard:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the pinned development workflow and local checks. The completed [V2 lifecycle](v2/README.md) remains the behavioral baseline; [V3](v3/README.md) tracks public-product work.
 
-```bash
-./bin/agentctl agent init
-```
+## Project policies
 
-The wizard asks for the agent name, target bundle, public settings, and age recipient, with defaults where available. The flag-based form remains available:
-
-```bash
-./bin/agentctl agent init \
-  --name sample-agent \
-  --file agents/sample-agent.agent.yml \
-  --age-recipient age1replace-with-your-public-recipient
-
-./bin/agentctl agent inspect --file agents/sample-agent.agent.yml
-./bin/agentctl agent doctor --file agents/sample-agent.agent.yml
-./bin/agentctl agent up --file agents/sample-agent.agent.yml
-./bin/agentctl agent status --file agents/sample-agent.agent.yml
-./bin/agentctl agent open --file agents/sample-agent.agent.yml
-./bin/agentctl agent ssh --file agents/sample-agent.agent.yml
-./bin/agentctl agent down --file agents/sample-agent.agent.yml
-```
-
-Initialization validates SOPS and local decryption before prompting for credentials, generates an agent-specific Ed25519 identity, and publishes the bundle atomically with mode `0600`. Inspection resolves a redacted plan. Doctor checks bundle credentials and local prerequisites. `up` can securely restore local archives into fresh `/opt/data` and disposable `/workdir`, create billable DigitalOcean resources, and succeeds only after private SSH/Tailscale access and Hermes health are ready. `status` reports the same readiness in read-only dependency layers.
-
-See [Agent bundles and inspection](docs/agent-bundles.md), [Bring up an agent](docs/agent-up.md), [Check layered agent health](docs/agent-status.md), [Access a running agent](docs/agent-access.md), [Workspace and Compose](docs/compose-workspace.md), and [Take an agent down safely](docs/agent-down.md).
-
-## Project information
-
-- [Status, supported boundary, costs, and limitations](docs/project-status.md)
-- [Install or upgrade Linux amd64](docs/install.md)
 - [Apache License 2.0](LICENSE)
 - [Security policy](SECURITY.md)
 - [Support](SUPPORT.md)
-- [Contributing](CONTRIBUTING.md)
-- [Completed V2 lifecycle](v2/README.md)
-- [Public product roadmap](v3/README.md)
-
-The V3 roadmap does not introduce a V3 bundle schema; existing version 2 bundles remain the current product contract.
+- [Project status and limitations](docs/project-status.md)

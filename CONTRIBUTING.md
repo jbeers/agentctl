@@ -9,6 +9,7 @@
 - MatchBox
 - Bash
 - Git
+- Python 3.13 for documentation changes
 
 Install the declared development dependencies, run the deterministic suite, and build the native executable:
 
@@ -19,6 +20,16 @@ box run-script build
 ```
 
 The generated executable is ignored under `bin/` and must not be committed.
+
+For documentation changes, install the pinned site generator in an isolated Python environment and run the strict site check:
+
+```bash
+python3 -m venv /tmp/agentctl-docs
+/tmp/agentctl-docs/bin/pip install -r requirements-docs.txt
+PATH="/tmp/agentctl-docs/bin:$PATH" scripts/check-docs /tmp/agentctl-site
+```
+
+The check rejects broken internal links, missing navigation targets, unresolved release placeholders, and drift between documented and built-in release/runtime defaults.
 
 ## Change rules
 
@@ -44,8 +55,9 @@ Before proposing a change:
 
 1. Run the complete TestBox suite.
 2. Run the native build and smallest relevant native smoke check.
-3. Run `git diff --check`.
-4. Confirm no bundle, credential, generated binary, test result, or local temporary file is staged.
-5. Update the issue acceptance criteria and roadmap status in the same change when the slice is complete.
+3. Build the strict documentation site when Markdown, release metadata, or runtime defaults change.
+4. Run `git diff --check`.
+5. Confirm no bundle, credential, generated binary, site output, test result, or local temporary file is staged.
+6. Update the issue acceptance criteria and roadmap status in the same change when the slice is complete.
 
 A change should explain the user-visible behavior, its runnable verification, and any deliberate limitation. Security concerns must follow [SECURITY.md](SECURITY.md), not a public review thread.

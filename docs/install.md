@@ -37,7 +37,7 @@ agentctl --help
 
 `--version` reports both the application version and the exact source revision embedded by the release build.
 
-Continue with [agent bundle initialization](agent-bundles.md). Application versioning does not change the bundle schema: existing valid version 2 bundles remain readable and require no migration.
+Continue with [Prerequisites](prerequisites.md) and [Create your first agent](first-agent.md). Application versioning does not change the bundle schema: existing valid version 2 bundles remain readable and require no migration.
 
 ## Upgrade
 

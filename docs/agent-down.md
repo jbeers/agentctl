@@ -3,7 +3,7 @@
 `agent down` removes disposable compute while retaining the provider volume that contains Hermes state:
 
 ```bash
-./bin/agentctl agent down --file agents/sample-agent.agent.yml
+agentctl agent down --file agents/sample-agent.agent.yml
 ```
 
 This command is destructive: the Droplet and its `/workdir` are deleted. The provider volume `agent-home-<agent-name>` is retained and is reused by a later `agent up`.
@@ -31,9 +31,11 @@ If the Droplet is already absent, the command succeeds without creating a tempor
 A per-command hostname override can resolve a temporary MagicDNS collision without changing the bundle:
 
 ```bash
-./bin/agentctl agent down \
+agentctl agent down \
   --file agents/sample-agent.agent.yml \
   --hostname sample-agent-1
 ```
 
 Temporary local identity and script files use mode `0600` and are removed on success or failure. Remote shutdown and logout scripts remove themselves and contain no bundle secrets.
+
+After `down`, the retained volume remains billable. Follow [Persistence, billing, and cleanup](persistence.md), and delete a tutorial volume only through the guarded provider procedure in the [first-agent guide](first-agent.md#delete-the-retained-tutorial-volume).

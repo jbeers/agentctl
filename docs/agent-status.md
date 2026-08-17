@@ -3,7 +3,7 @@
 `agent status` reports whether the infrastructure and Hermes runtime described by one explicit bundle are usable:
 
 ```bash
-./bin/agentctl agent status --file agents/sample-agent.agent.yml
+agentctl agent status --file agents/sample-agent.agent.yml
 ```
 
 The command is read-only. It does not create, attach, restart, delete, or otherwise reconcile resources. Checks stop at the first failed dependency while every later layer remains visible as `not checked`.
@@ -33,7 +33,7 @@ No public IPv4 address is queried or used for health checks. Provider and remote
 Use the same intentional temporary hostname override supported by other access commands when needed:
 
 ```bash
-./bin/agentctl agent status \
+agentctl agent status \
   --file agents/sample-agent.agent.yml \
   --hostname sample-agent-1 \
   --verbose

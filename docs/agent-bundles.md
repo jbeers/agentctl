@@ -7,7 +7,7 @@ A V2 agent bundle is one YAML file containing readable agent intent and one dedi
 With no options, initialization starts an interactive wizard:
 
 ```bash
-./bin/agentctl agent init
+agentctl agent init
 ```
 
 The wizard asks for the agent name, bundle path, DigitalOcean region and size, Tailscale hostname, runtime image, dashboard username, and age recipient. Press Enter to accept a displayed default. A blank age recipient uses a matching SOPS creation rule. The wizard proposes `<agent-name>.agent.yml` but does not scan the current directory or overwrite an existing path. Supplying any option selects the flag-based form, where both `--name` and `--file` remain required.
@@ -15,7 +15,7 @@ The wizard asks for the agent name, bundle path, DigitalOcean region and size, T
 For the flag-based form, provide the identity and target explicitly:
 
 ```bash
-./bin/agentctl agent init \
+agentctl agent init \
   --name sample-agent \
   --file agents/sample-agent.agent.yml \
   --age-recipient age1replace-with-your-public-recipient
@@ -36,7 +36,7 @@ The target must not exist. The completed bundle is published atomically with mod
 Public choices can be supplied during initialization:
 
 ```bash
-./bin/agentctl agent init \
+agentctl agent init \
   --name sample-agent \
   --file agents/sample-agent.agent.yml \
   --region fra1 \
@@ -140,7 +140,7 @@ Neither normal output nor errors include secret values, private-key material, or
 ## Inspect
 
 ```bash
-./bin/agentctl agent inspect --file agents/sample.agent.yml
+agentctl agent inspect --file agents/sample.agent.yml
 ```
 
 There is no current-directory discovery and no lifecycle environment-variable precedence. The command reads the selected file and may invoke local `sops`; it does not invoke DigitalOcean, SSH, SCP, Tailscale, or a browser. `--verbose` reports only whether the validated bundle was plaintext or SOPS-encrypted.
@@ -148,20 +148,20 @@ There is no current-directory discovery and no lifecycle environment-variable pr
 Per-command archive intent can be included without storing paths in the bundle:
 
 ```bash
-./bin/agentctl agent inspect \
+agentctl agent inspect \
   --file agents/sample.agent.yml \
   --state-archive /protected/state.tar \
   --workspace-archive /protected/workspace.tar
 ```
 
-Inspection reports each archive as provided but does not print its path or read the archive. `agent up --state-archive <path>` restores validated Hermes state into empty `/opt/data`; `--workspace-archive <path>` seeds empty, disposable `/workdir`. Both may be supplied together. See [Bring up an agent](agent-up.md#restore-state-and-seed-the-workspace).
+Inspection reports each archive as provided but does not print its path or read the archive. `agent up --state-archive <path>` restores validated Hermes state into empty `/opt/data`; `--workspace-archive <path>` seeds empty, disposable `/workdir`. Both may be supplied together. See [Restore state and seed a workspace](archives.md).
 
 The lifecycle summary makes retention explicit: `down` will discard the Droplet and `/workdir`, while retaining the provider volume mounted into Hermes at `/opt/data`.
 
 ## Doctor
 
 ```bash
-./bin/agentctl agent doctor --file agents/sample-agent.agent.yml
+agentctl agent doctor --file agents/sample-agent.agent.yml
 ```
 
 Doctor performs no resource creation or mutation. It checks:
