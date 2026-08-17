@@ -16,25 +16,33 @@ class {
 		if (!droplet.exists) {
 			result.state = "absent";
 			result.compute = "absent";
+			result.layerStates.compute = machineLayer("absent", "absent");
 			return result;
 		}
 
 		result.compute = droplet.status & " (Droplet " & droplet.id & ")";
 		if (droplet.status == "new") {
 			result.state = "provisioning";
+			result.layerStates.compute = machineLayer("provisioning", "new");
 			return result;
 		}
-		if (droplet.status != "active") return result;
+		if (droplet.status != "active") {
+			result.layerStates.compute = machineLayer("unhealthy", "inactive");
+			return result;
+		}
+		result.layerStates.compute = machineLayer("ready", "active");
 
 		var volumeName = plan.derived.volumeName;
 		var volume = findVolume(volumeName);
 		if (!volume.exists) {
 			result.volume = "missing (" & volumeName & ")";
+			result.layerStates.volume = machineLayer("absent", "missing");
 			return result;
 		}
 		var expectedSize = replace(plan.values.stateSize.value, "GiB", "", "all");
 		if (volume.region != plan.values.region.value || volume.size != expectedSize) {
 			result.volume = "configuration mismatch (" & volumeName & ")";
+			result.layerStates.volume = machineLayer("unhealthy", "configuration_mismatch");
 			return result;
 		}
 		var attachedIds = volumeAttachmentIds(volume.id);
@@ -42,16 +50,23 @@ class {
 			result.volume = arrayLen(attachedIds) == 0 ?
 				"not attached to Droplet " & droplet.id :
 				"attached to another Droplet";
+			result.layerStates.volume = machineLayer(
+				"unhealthy",
+				arrayLen(attachedIds) == 0 ? "detached" : "attached_elsewhere"
+			);
 			return result;
 		}
 		result.volume = "attached (" & volumeName & ", " & volume.id & ")";
+		result.layerStates.volume = machineLayer("ready", "attached");
 
 		if (!variables.runner.isAvailable("ssh")) {
 			result.access = "unavailable: local ssh is not installed";
+			result.layerStates.access = machineLayer("unhealthy", "local_ssh_unavailable");
 			return result;
 		}
 		if (!variables.runner.isAvailable("ssh-keygen")) {
 			result.access = "unavailable: local ssh-keygen is not installed";
+			result.layerStates.access = machineLayer("unhealthy", "local_ssh_keygen_unavailable");
 			return result;
 		}
 		if (
@@ -59,6 +74,7 @@ class {
 			arguments.resolved.secretValues.sshPrivateKey == ""
 		) {
 			result.access = "unavailable: bundle SSH credential is missing";
+			result.layerStates.access = machineLayer("unhealthy", "bundle_ssh_credential_missing");
 			return result;
 		}
 
@@ -71,40 +87,62 @@ class {
 				);
 			} catch (error) {
 				result.access = "unavailable: agent SSH private key is invalid or passphrase-protected";
+				result.layerStates.access = machineLayer("unhealthy", "invalid_ssh_credential");
 				return result;
 			}
 
 			var access = executeSsh(identity.path, result.hostname, [ "tailscale", "status" ]);
 			if (!succeeded(access)) {
 				result.access = isTransportFailure(access) ? accessFailure(access) : "SSH reachable; Tailscale unhealthy";
+				result.layerStates.access = machineLayer(
+					"unhealthy",
+					isTransportFailure(access) ? accessFailureDetail(access) : "tailscale_unhealthy"
+				);
 				return result;
 			}
 			result.access = "reachable";
+			result.layerStates.access = machineLayer("ready", "reachable");
 
 			var container = executeSsh(identity.path, result.hostname, [ "/bin/bash", "-s" ], containerStatusCommand());
 			if (!succeeded(container)) {
-				if (isTransportFailure(container)) result.access = accessFailure(container);
+				if (isTransportFailure(container)) {
+					result.access = accessFailure(container);
+					result.layerStates.access = machineLayer("unhealthy", accessFailureDetail(container));
+				}
 				result.container = isTransportFailure(container) ? "not checked" : "unavailable";
+				if (!isTransportFailure(container)) result.layerStates.container = machineLayer("unhealthy", "unavailable");
 				return result;
 			}
 			result.container = containerState(container);
+			result.layerStates.container = result.container == "running" ?
+				machineLayer("ready", "running") : machineLayer("unhealthy", result.container);
 			if (result.container != "running") return result;
 
 			var gateway = executeSsh(identity.path, result.hostname, [ "/bin/bash", "-s" ], healthCommand(8642, "/health"));
 			if (!succeeded(gateway)) {
-				if (isTransportFailure(gateway)) result.access = accessFailure(gateway);
+				if (isTransportFailure(gateway)) {
+					result.access = accessFailure(gateway);
+					result.layerStates.access = machineLayer("unhealthy", accessFailureDetail(gateway));
+				}
 				result.gateway = isTransportFailure(gateway) ? "not checked" : "unhealthy";
+				if (!isTransportFailure(gateway)) result.layerStates.gateway = machineLayer("unhealthy", "unhealthy");
 				return result;
 			}
 			result.gateway = "healthy";
+			result.layerStates.gateway = machineLayer("ready", "healthy");
 
 			var dashboard = executeSsh(identity.path, result.hostname, [ "/bin/bash", "-s" ], healthCommand(9119, "/"));
 			if (!succeeded(dashboard)) {
-				if (isTransportFailure(dashboard)) result.access = accessFailure(dashboard);
+				if (isTransportFailure(dashboard)) {
+					result.access = accessFailure(dashboard);
+					result.layerStates.access = machineLayer("unhealthy", accessFailureDetail(dashboard));
+				}
 				result.dashboard = isTransportFailure(dashboard) ? "not checked" : "unhealthy";
+				if (!isTransportFailure(dashboard)) result.layerStates.dashboard = machineLayer("unhealthy", "unhealthy");
 				return result;
 			}
 			result.dashboard = "healthy";
+			result.layerStates.dashboard = machineLayer("ready", "healthy");
 			result.state = "ready";
 			result.ready = true;
 			return result;
@@ -131,14 +169,52 @@ class {
 		return joinValues(lines, char(10));
 	}
 
+	function formatJson(required struct result) {
+		var layers = [];
+		for (var name in [ "configuration", "compute", "volume", "access", "container", "gateway", "dashboard" ]) {
+			arrayAppend(layers, {
+				name : name,
+				state : arguments.result.layerStates[name].state,
+				detail : arguments.result.layerStates[name].detail
+			});
+		}
+		return jsonSerialize({
+			schemaVersion : 1,
+			agent : { name : arguments.result.name, hostname : arguments.result.hostname },
+			state : arguments.result.state,
+			ready : arguments.result.ready,
+			layers : layers
+		});
+	}
+
+	function failureResult(struct plan = {}, string failureType = "invalid_local_configuration") {
+		var result = structKeyExists(arguments.plan, "values") ?
+			baseResult(arguments.plan, false) : baseIdentityResult("", "", false);
+		result.state = "indeterminate";
+		if (arguments.failureType == "provider_failure") {
+			result.layerStates.compute = machineLayer("indeterminate", "provider_failure");
+		} else {
+			result.layerStates.configuration = machineLayer("indeterminate", "invalid_local_configuration");
+		}
+		return result;
+	}
+
 	function exitCode(required struct result) {
 		return arguments.result.ready ? 0 : 1;
 	}
 
 	private function baseResult(required struct plan, required boolean verbose) {
+		return baseIdentityResult(
+			arguments.plan.values.name.value,
+			arguments.plan.values.hostname.value,
+			arguments.verbose
+		);
+	}
+
+	private function baseIdentityResult(required string name, required string hostname, required boolean verbose) {
 		return {
-			name : arguments.plan.values.name.value,
-			hostname : arguments.plan.values.hostname.value,
+			name : arguments.name,
+			hostname : arguments.hostname,
 			state : "unhealthy",
 			ready : false,
 			compute : "not checked",
@@ -147,8 +223,21 @@ class {
 			container : "not checked",
 			gateway : "not checked",
 			dashboard : "not checked",
-			verbose : arguments.verbose
+			verbose : arguments.verbose,
+			layerStates : {
+				configuration : machineLayer("ready", "valid"),
+				compute : machineLayer("not_checked", "not_checked"),
+				volume : machineLayer("not_checked", "not_checked"),
+				access : machineLayer("not_checked", "not_checked"),
+				container : machineLayer("not_checked", "not_checked"),
+				gateway : machineLayer("not_checked", "not_checked"),
+				dashboard : machineLayer("not_checked", "not_checked")
+			}
 		};
+	}
+
+	private function machineLayer(required string state, required string detail) {
+		return { state : arguments.state, detail : arguments.detail };
 	}
 
 	private function findDroplet(required string name) {
@@ -254,6 +343,15 @@ class {
 		}
 		if (structKeyExists(arguments.response, "timeout") && arguments.response.timeout) return "unreachable over Tailscale: SSH check timed out";
 		return "unreachable over Tailscale";
+	}
+
+	private function accessFailureDetail(required struct response) {
+		var errorText = structKeyExists(arguments.response, "error") && !isNull(arguments.response.error) && isSimpleValue(arguments.response.error) ? uCase(toString(arguments.response.error)) : "";
+		if (find("REMOTE HOST IDENTIFICATION HAS CHANGED", errorText) > 0 || find("HOST KEY VERIFICATION FAILED", errorText) > 0) {
+			return "host_key_mismatch";
+		}
+		if (structKeyExists(arguments.response, "timeout") && arguments.response.timeout) return "ssh_timeout";
+		return "ssh_unreachable";
 	}
 
 	private function isTransportFailure(required struct response) {

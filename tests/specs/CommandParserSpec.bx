@@ -229,6 +229,17 @@ class extends="testbox.system.BaseSpec" {
 				expect(result.action).toBe("status");
 				expect(result.overrides.hostname).toBe("test-agent-1");
 				expect(result.verbose).toBeTrue();
+				expect(result.json).toBeFalse();
+				var jsonResult = parser.parse({
+					positionals : [ "agent", "status" ],
+					options : { file : "agent.yml", json : true }
+				});
+				expect(jsonResult.valid).toBeTrue();
+				expect(jsonResult.json).toBeTrue();
+				expect(parser.parse({
+					positionals : [ "agent", "status" ],
+					options : { file : "agent.yml", json : true, verbose : true }
+				}).error).toBe("agent status does not allow '--verbose' with '--json'");
 				expect(parser.parse({
 					positionals : [ "agent", "status" ],
 					options : {}

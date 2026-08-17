@@ -93,7 +93,7 @@ A state [export](archives.md#export-a-ready-agent) contains that same authority 
 
 ## Safe output and support
 
-Normal and verbose lifecycle output omits decrypted values, SOPS ciphertext, private keys, payloads, remote environment files, registry tokens, and archive contents. Provider and remote output is reduced to focused states rather than relayed verbatim.
+Normal, verbose, and status JSON output omits decrypted values, SOPS ciphertext, private keys and paths, payloads, remote environment files, registry tokens, raw provider objects, public IPv4, endpoint bodies, and archive contents. Provider and remote output is reduced to focused product states rather than relayed verbatim.
 
 Do not publish a real bundle, ciphertext, archive, hostname, public IP address, provider identifier, or unreviewed verbose log. Follow the repository [security policy](https://github.com/jbeers/agentctl/blob/main/SECURITY.md) for private vulnerability reports and [support policy](https://github.com/jbeers/agentctl/blob/main/SUPPORT.md) for redacted operational help.
 

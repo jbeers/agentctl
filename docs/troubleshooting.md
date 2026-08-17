@@ -48,7 +48,7 @@ Provider failures occur before private SSH and may be authentication, exact iden
 - Use the control panel or read-only `doctl` lists to identify exact-name resources.
 - Multiple exact-name Droplets or volumes are intentionally refused; remove ambiguity only after independently identifying every resource.
 - A volume in a different region, at a different size, or attached to another Droplet is never silently adopted.
-- A provider API error is indeterminate, not proof that a resource is absent. Do not create or delete replacements while the account state is uncertain.
+- A provider API error is indeterminate, not proof that a resource is absent. Do not create or delete replacements while the account state is uncertain. Status `--json` emits an `indeterminate` document on stdout while keeping the focused provider diagnostic on stderr; automation should preserve both the JSON and nonzero exit code.
 
 `up` is idempotent for one unambiguous exact-name appliance. Rerun it after correcting authentication or provider state.
 

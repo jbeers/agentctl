@@ -10,7 +10,7 @@ The completed implementation can:
 - Create or reconcile an Ubuntu 24.04 DigitalOcean Droplet and retained Block Storage volume.
 - Enroll the host in Tailscale and keep public inbound firewall rules empty.
 - Run Hermes as an unprivileged user with a rootless Podman socket.
-- Report provider, volume, SSH, container, gateway, and dashboard health.
+- Report provider, volume, SSH, container, gateway, and dashboard health as human text or versioned JSON.
 - Open private SSH repair access and the Hermes dashboard.
 - Run Hermes terminal, file, patch, and rootless Compose workflows under `/workdir`.
 - Restore validated state and workspace archives into separate empty destinations.
@@ -20,7 +20,7 @@ The completed implementation can:
 - Guard exact detached-volume purge behind repeated provider checks and typed confirmation.
 - Rebuild disposable compute while preserving `/opt/data` and discarding `/workdir`.
 
-The V2 lifecycle paths passed deterministic tests, the live DigitalOcean/Tailscale exercise, and a separate clean-room exercise using only the public `v0.1.0-alpha.2` release and public runtime. Current-source credential rotation additionally passed deterministic and real-SOPS local acceptance; state export passed deterministic archive round-trip and failure acceptance; guarded purge passed deterministic and native fake-provider acceptance. Purge still awaits its separately approved live deletion, and all three commands await the next published executable. No VM received manual repair.
+The V2 lifecycle paths passed deterministic tests, the live DigitalOcean/Tailscale exercise, and a separate clean-room exercise using only the public `v0.1.0-alpha.2` release and public runtime. Current-source credential rotation additionally passed deterministic and real-SOPS local acceptance; state export passed deterministic archive round-trip and failure acceptance; guarded purge passed deterministic and native fake-provider acceptance; status JSON passed every layer boundary and native stdout/stderr acceptance. Purge still awaits its separately approved live deletion, and all four additions await the next published executable. No VM received manual repair.
 
 ## Current supported boundary
 
@@ -40,7 +40,7 @@ The V2 lifecycle paths passed deterministic tests, the live DigitalOcean/Tailsca
 - State export is deliberate and local; there is no automatic schedule, remote backup destination, or provider snapshot workflow.
 - `down` deletes the Droplet but deliberately retains the billable volume. Current-source guarded purge awaits operator-approved live deletion before completion; until then, production cleanup remains a separately reviewed provider operation.
 - `/workdir`, uncommitted source, and ordinary Compose volumes disappear with the Droplet. Hermes and the operator own Git commit and push safety.
-- The published `v0.1.0-alpha.2` executable predates `agent rotate`, `agent export`, and `agent purge`; use the next release for those commands.
+- The published `v0.1.0-alpha.2` executable predates `agent rotate`, `agent export`, `agent purge`, and status `--json`; use the next release for those features.
 - There is no idle shutdown, NAS control plane, admin-agent integration, public ingress, repository manager, or second cloud provider.
 - The project has not received a third-party security audit.
 
@@ -55,4 +55,4 @@ Removing the local `agentctl` executable or encrypted bundle does not remove pro
 - [Completed V2 lifecycle](https://github.com/jbeers/agentctl/blob/main/v2/README.md)
 - [Public product roadmap](https://github.com/jbeers/agentctl/blob/main/v3/README.md)
 
-Remaining public-alpha work completes live purge verification, adds JSON status, and runs the final public-alpha end-to-end proof.
+Remaining public-alpha work completes live purge verification and runs the final public-alpha end-to-end proof.

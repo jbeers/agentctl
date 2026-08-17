@@ -29,7 +29,7 @@ function usage(boolean errorStream = false) {
 		"  agentctl agent export --file <bundle> --output <archive> [--verbose]",
 		"  agentctl agent purge --file <bundle> [--verbose]",
 		"  agentctl agent up --file <bundle> [options]",
-		"  agentctl agent status --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
+		"  agentctl agent status --file <bundle> [--hostname <tailscale-hostname>] [--verbose|--json]",
 		"  agentctl agent open --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
 		"  agentctl agent ssh --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
 		"  agentctl agent down --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
@@ -56,6 +56,9 @@ function usage(boolean errorStream = false) {
 		"",
 		"Export options:",
 		"  --output <path>              Publish a new mode-0600 /opt/data state archive",
+		"",
+		"Status options:",
+		"  --json                       Emit one versioned JSON document on stdout",
 		"",
 		"Common options:",
 		"  --verbose",
@@ -220,6 +223,31 @@ try {
 	}
 	if (command.action == "status") {
 		status = new StatusService(runner);
+		if (command.json) {
+			resolved = {};
+			try {
+				resolved = bundles.resolveForUse(command.file, command.overrides);
+			} catch (bundleError) {
+				result = status.failureResult({}, "invalid_local_configuration");
+				systemOutput(status.formatJson(result), true);
+				message = structKeyExists(bundleError, "message") ? bundleError.message : "agent bundle validation failed";
+				systemOutput("agentctl: " & message, true, true);
+				exit(1);
+			}
+			try {
+				result = status.check(resolved);
+			} catch (statusError) {
+				message = structKeyExists(statusError, "message") ? statusError.message : "status check failed";
+				failureType = find("DigitalOcean", message) > 0 || find("provider", lCase(message)) > 0 ?
+					"provider_failure" : "invalid_local_configuration";
+				result = status.failureResult(resolved.plan, failureType);
+				systemOutput(status.formatJson(result), true);
+				systemOutput("agentctl: " & message, true, true);
+				exit(1);
+			}
+			systemOutput(status.formatJson(result), true);
+			exit(status.exitCode(result));
+		}
 		result = status.check(bundles.resolveForUse(command.file, command.overrides), command.verbose);
 		systemOutput(status.format(result), true, !result.ready);
 		exit(status.exitCode(result));

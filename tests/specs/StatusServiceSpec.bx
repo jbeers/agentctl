@@ -62,6 +62,24 @@ class extends="testbox.system.BaseSpec" {
 				expect(output).toInclude("Status checks: read-only over DigitalOcean and private Tailscale routes");
 				expect(output).notToInclude("test-private-material");
 				expect(output).notToInclude("provider-secret-must-not-leak");
+				var machineOutput = service.formatJson(result);
+				var document = jsonDeserialize(machineOutput);
+				expect(document.schemaVersion).toBe(1);
+				expect(document.agent).toBe({ name : "test-agent", hostname : "test-agent-1" });
+				expect(document.state).toBe("ready");
+				expect(document.ready).toBeTrue();
+				expect(document.layers.map((layer) => layer.name)).toBe([
+					"configuration", "compute", "volume", "access", "container", "gateway", "dashboard"
+				]);
+				for (var layer in document.layers) {
+					expect(layer.state).toBe("ready");
+					expect(listFind("ready,absent,provisioning,unhealthy,not_checked,indeterminate", layer.state)).toBeGT(0);
+				}
+				expect(find("101", machineOutput)).toBe(0);
+				expect(find("vol-101", machineOutput)).toBe(0);
+				expect(find("test-private-material", machineOutput)).toBe(0);
+				expect(find("provider-secret-must-not-leak", machineOutput)).toBe(0);
+				expect(find(state.identityPath, machineOutput)).toBe(0);
 				expect(systemExecute("bash", [ "-n", "-c", state.containerCommand ]).exitCode).toBe(0);
 				expect(state.containerCommand).toInclude('cd "$agent_home" && runuser -u agent');
 				expect(systemExecute("bash", [ "-n", "-c", state.gatewayCommand ]).exitCode).toBe(0);
@@ -90,29 +108,34 @@ class extends="testbox.system.BaseSpec" {
 				var missingVolume = new src.services.StatusService(scriptedRunner(missingVolumeState)).check(resolvedBundle("test-agent"));
 				expect(missingVolume.state).toBe("unhealthy");
 				expect(missingVolume.volume).toBe("missing (agent-home-test-agent)");
+				expect(jsonLayer(machineDocument(missingVolume), "volume").state).toBe("absent");
 				expect(missingVolumeState.events).toBe([ "droplet", "volume" ]);
 
 				var detachedState = statusState({ attached : "" });
 				var detached = new src.services.StatusService(scriptedRunner(detachedState)).check(resolvedBundle("test-agent"));
 				expect(detached.volume).toBe("not attached to Droplet 101");
+				expect(jsonLayer(machineDocument(detached), "volume").detail).toBe("detached");
 				expect(detachedState.events).toBe([ "droplet", "volume", "attachment" ]);
 
 				var containerState = statusState({ containerStatus : "exited" });
 				var container = new src.services.StatusService(scriptedRunner(containerState)).check(resolvedBundle("test-agent"));
 				expect(container.container).toBe("exited");
 				expect(container.gateway).toBe("not checked");
+				expect(jsonLayer(machineDocument(container), "container").detail).toBe("exited");
 				expect(containerState.events).toBe([ "droplet", "volume", "attachment", "access", "container" ]);
 
 				var gatewayState = statusState({ gatewayFailure : true });
 				var gateway = new src.services.StatusService(scriptedRunner(gatewayState)).check(resolvedBundle("test-agent"));
 				expect(gateway.gateway).toBe("unhealthy");
 				expect(gateway.dashboard).toBe("not checked");
+				expect(jsonLayer(machineDocument(gateway), "gateway").state).toBe("unhealthy");
 				expect(gatewayState.events).notToInclude("dashboard");
 
 				var dashboardState = statusState({ dashboardFailure : true });
 				var dashboard = new src.services.StatusService(scriptedRunner(dashboardState)).check(resolvedBundle("test-agent"));
 				expect(dashboard.dashboard).toBe("unhealthy");
 				expect(dashboard.state).toBe("unhealthy");
+				expect(jsonLayer(machineDocument(dashboard), "dashboard").state).toBe("unhealthy");
 				expect(fileExists(dashboardState.identityPath)).toBeFalse();
 			});
 
@@ -123,6 +146,7 @@ class extends="testbox.system.BaseSpec" {
 				expect(mismatch.state).toBe("unhealthy");
 				expect(mismatch.access).toBe("host key mismatch; run agent up to verify and reconcile the disposable host");
 				expect(mismatch.container).toBe("not checked");
+				expect(jsonLayer(machineDocument(mismatch), "access").detail).toBe("host_key_mismatch");
 				expect(fileExists(mismatchState.identityPath)).toBeFalse();
 				for (var call in mismatchRunner.getCalls()) {
 					expect(arrayToList(call.arguments, ",")).notToInclude("-R,test-agent");
@@ -132,7 +156,51 @@ class extends="testbox.system.BaseSpec" {
 				var tailscaleState = statusState({ tailscaleFailure : true });
 				var tailscale = new src.services.StatusService(scriptedRunner(tailscaleState)).check(resolvedBundle("test-agent"));
 				expect(tailscale.access).toBe("SSH reachable; Tailscale unhealthy");
+				expect(jsonLayer(machineDocument(tailscale), "access").detail).toBe("tailscale_unhealthy");
 				expect(tailscaleState.events).toBe([ "droplet", "volume", "attachment", "access" ]);
+			});
+
+			it("emits parseable stable JSON for every non-ready and indeterminate boundary", () => {
+				var service = new src.services.StatusService(scriptedRunner(statusState({ droplets : "" })));
+				var absent = service.check(resolvedBundle("test-agent"));
+				var absentDocument = jsonDeserialize(service.formatJson(absent));
+				expect(absentDocument.state).toBe("absent");
+				expect(absentDocument.ready).toBeFalse();
+				expect(jsonLayer(absentDocument, "compute")).toBe({ name : "compute", state : "absent", detail : "absent" });
+				expect(jsonLayer(absentDocument, "volume").state).toBe("not_checked");
+				expect(service.exitCode(absent)).toBe(1);
+
+				var provisioningService = new src.services.StatusService(scriptedRunner(statusState({ droplets : "101 test-agent new" })));
+				var provisioningDocument = jsonDeserialize(provisioningService.formatJson(
+					provisioningService.check(resolvedBundle("test-agent"))
+				));
+				expect(provisioningDocument.state).toBe("provisioning");
+				expect(jsonLayer(provisioningDocument, "compute").state).toBe("provisioning");
+
+				var containerService = new src.services.StatusService(scriptedRunner(statusState({ containerStatus : "exited" })));
+				var containerDocument = jsonDeserialize(containerService.formatJson(
+					containerService.check(resolvedBundle("test-agent"))
+				));
+				expect(containerDocument.state).toBe("unhealthy");
+				expect(jsonLayer(containerDocument, "container").detail).toBe("exited");
+				expect(jsonLayer(containerDocument, "gateway").state).toBe("not_checked");
+
+				var plan = resolvedBundle("test-agent").plan;
+				var providerFailure = jsonDeserialize(service.formatJson(service.failureResult(plan, "provider_failure")));
+				expect(providerFailure.state).toBe("indeterminate");
+				expect(jsonLayer(providerFailure, "configuration").state).toBe("ready");
+				expect(jsonLayer(providerFailure, "compute")).toBe({
+					name : "compute", state : "indeterminate", detail : "provider_failure"
+				});
+				var invalid = jsonDeserialize(service.formatJson(service.failureResult({}, "invalid_local_configuration")));
+				expect(invalid.agent).toBe({ name : "", hostname : "" });
+				expect(invalid.state).toBe("indeterminate");
+				expect(jsonLayer(invalid, "configuration").detail).toBe("invalid_local_configuration");
+				for (var document in [ absentDocument, provisioningDocument, containerDocument, providerFailure, invalid ]) {
+					for (var layer in document.layers) {
+						expect(listFind("ready,absent,provisioning,unhealthy,not_checked,indeterminate", layer.state)).toBeGT(0);
+					}
+				}
 			});
 
 			it("distinguishes provider failure and invalid local access configuration from absence", () => {
@@ -152,11 +220,13 @@ class extends="testbox.system.BaseSpec" {
 				var missingSsh = new src.services.StatusService(scriptedRunner(missingSshState)).check(resolvedBundle("test-agent"));
 				expect(missingSsh.access).toBe("unavailable: local ssh is not installed");
 				expect(missingSsh.state).toBe("unhealthy");
+				expect(jsonLayer(machineDocument(missingSsh), "access").detail).toBe("local_ssh_unavailable");
 				expect(missingSshState.identityPath).toBe("");
 
 				var invalidKeyState = statusState({ invalidKey : true });
 				var invalidKey = new src.services.StatusService(scriptedRunner(invalidKeyState)).check(resolvedBundle("test-agent"));
 				expect(invalidKey.access).toBe("unavailable: agent SSH private key is invalid or passphrase-protected");
+				expect(jsonLayer(machineDocument(invalidKey), "access").detail).toBe("invalid_ssh_credential");
 				expect(fileExists(invalidKeyState.identityPath)).toBeFalse();
 			});
 		});
@@ -255,6 +325,17 @@ class extends="testbox.system.BaseSpec" {
 			{ doctl : true, ssh : state.sshAvailable, "ssh-keygen" : state.keygenAvailable },
 			handler
 		);
+	}
+
+	private function machineDocument(required struct result) {
+		return jsonDeserialize(new src.services.StatusService(new FakeCommandRunner()).formatJson(arguments.result));
+	}
+
+	private function jsonLayer(required struct document, required string name) {
+		for (var layer in arguments.document.layers) {
+			if (layer.name == arguments.name) return layer;
+		}
+		throw "missing JSON status layer";
 	}
 
 	private function success(string output = "") {

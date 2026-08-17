@@ -38,9 +38,11 @@ class {
 						"file,credential,remove,verbose" :
 						action == "export" ?
 							"file,output,verbose" :
-							(action == "status" || action == "open" || action == "ssh" || action == "down") ?
-								"file,hostname,verbose" :
-								"file,verbose";
+							action == "status" ?
+								"file,hostname,verbose,json" :
+								(action == "open" || action == "ssh" || action == "down") ?
+									"file,hostname,verbose" :
+									"file,verbose";
 		for (var optionName in structKeyArray(options)) {
 			if (listFindNoCase(allowed, optionName) == 0) {
 				return invalid(
@@ -48,7 +50,7 @@ class {
 					(action == "inspect" ? "" : " for agent " & action)
 				);
 			}
-			if (optionName == "verbose" || optionName == "remove") {
+			if (optionName == "verbose" || optionName == "remove" || optionName == "json") {
 				if (!isBoolean(options[optionName]) || !options[optionName]) {
 					return invalid("option '--" & optionName & "' does not accept a value");
 				}
@@ -77,6 +79,9 @@ class {
 		if (action == "export" && !structKeyExists(options, "output")) {
 			return invalid("agent export requires '--output'");
 		}
+		if (action == "status" && structKeyExists(options, "json") && structKeyExists(options, "verbose")) {
+			return invalid("agent status does not allow '--verbose' with '--json'");
+		}
 
 		var result = {
 			valid : true,
@@ -85,6 +90,7 @@ class {
 			file : trim(options.file),
 			verbose : structKeyExists(options, "verbose")
 		};
+		if (action == "status") result.json = structKeyExists(options, "json");
 		if (action == "rotate") {
 			result.credential = lCase(trim(options.credential));
 			if (listFind("tailscale-auth-key,registry-token,dashboard-password", result.credential) == 0) {
