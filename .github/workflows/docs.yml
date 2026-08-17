@@ -1,6 +1,7 @@
 name: Documentation
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main]
     paths:
@@ -61,14 +62,14 @@ jobs:
         run: scripts/check-docs site
 
       - name: Upload GitHub Pages artifact
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9
         with:
           path: site
 
   deploy:
     name: Deploy GitHub Pages
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-24.04
     permissions:
