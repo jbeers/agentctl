@@ -6,6 +6,10 @@
 
 `down` deletes compute and `/workdir` but intentionally retains the billable provider volume containing `/opt/data`. That volume is working state, not an independent backup.
 
+## Install
+
+The first supported operator target is Linux `amd64`. See [download, checksum verification, installation, upgrade, and uninstall](docs/install.md). Existing version 2 bundles remain compatible with application releases.
+
 ## Build from source and test
 
 Requirements: BoxLang, CommandBox, and the local or installed MatchBox compiler.
@@ -50,6 +54,7 @@ See [Agent bundles and inspection](docs/agent-bundles.md), [Bring up an agent](d
 ## Project information
 
 - [Status, supported boundary, costs, and limitations](docs/project-status.md)
+- [Install or upgrade Linux amd64](docs/install.md)
 - [Apache License 2.0](LICENSE)
 - [Security policy](SECURITY.md)
 - [Support](SUPPORT.md)

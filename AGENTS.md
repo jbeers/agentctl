@@ -13,7 +13,7 @@ The completed `./v2/PRD.md` and `./v2/issues/*.md` define the current product be
 
 ## Technology
 
-The program will be written in BoxLang using MatchBox to configure platform binaries. External files like bash scripts, auxilery files, etc... should be included in the binary. 
+The program will be written in BoxLang using MatchBox to configure platform binaries. External files like bash scripts, auxilery files, etc... should be included in the binary.
 
 Use TestBox for tests.
 

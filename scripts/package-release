@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+destination=${1:-"$project_root/dist"}
+
+[[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || {
+  printf 'release packaging supports Linux amd64 only\n' >&2
+  exit 1
+}
+[[ -x $project_root/bin/agentctl ]] || {
+  printf 'build bin/agentctl before packaging\n' >&2
+  exit 1
+}
+
+version=$(awk -F '"' '$2 == "version" { print $4; exit }' "$project_root/box.json")
+revision=$(git -C "$project_root" rev-parse --verify HEAD)
+filename="agentctl-$version-linux-amd64"
+
+mkdir -p "$destination"
+install -m 0755 "$project_root/bin/agentctl" "$destination/$filename"
+(
+  cd "$destination"
+  sha256sum "$filename" > "$filename.sha256"
+  sha256sum --check "$filename.sha256"
+)
+
+smoke_root=$(mktemp -d)
+trap 'rm -rf "$smoke_root"' EXIT
+mkdir -p "$smoke_root/home"
+install -m 0755 "$destination/$filename" "$smoke_root/agentctl"
+install -m 0600 "$project_root/tests/fixtures/plaintext.agent.yml" "$smoke_root/fixture.agent.yml"
+
+clean=(env -i "HOME=$smoke_root/home" PATH=/usr/bin:/bin)
+version_output=$("${clean[@]}" "$smoke_root/agentctl" --version)
+[[ $version_output == "agentctl $version (revision $revision)" ]]
+"${clean[@]}" "$smoke_root/agentctl" --help >/dev/null
+inspection=$(cd "$smoke_root" && "${clean[@]}" ./agentctl agent inspect --file fixture.agent.yml)
+grep -Fq 'Agent name: sample-agent [bundle]' <<< "$inspection"
+grep -Fq 'Secrets (values are never shown):' <<< "$inspection"
+
+printf '%s\n' "$destination/$filename"
+printf '%s\n' "$destination/$filename.sha256"

@@ -12,7 +12,26 @@ else
   matchbox_bin=matchbox
 fi
 
+version=$(awk -F '"' '$2 == "version" { print $4; exit }' "$project_root/box.json")
+revision=$(git -C "$project_root" rev-parse --verify HEAD)
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+  printf 'invalid application version in box.json\n' >&2
+  exit 1
+}
+[[ $revision =~ ^[0-9a-f]{40}$ ]] || {
+  printf 'could not determine the source revision\n' >&2
+  exit 1
+}
+
+build_source=$(mktemp "$project_root/src/.agentctl-build.XXXXXX.bxs")
+trap 'rm -f "$build_source"' EXIT
+sed \
+  -e "s/__AGENTCTL_VERSION__/$version/g" \
+  -e "s/__AGENTCTL_REVISION__/$revision/g" \
+  "$project_root/src/agentctl.bxs" > "$build_source"
+
 mkdir -p "$project_root/bin"
+cd "$project_root"
 "$matchbox_bin" --target native \
   --output "$project_root/bin/agentctl" \
-  "$project_root/src/agentctl.bxs"
+  "$build_source"

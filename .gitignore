@@ -1,4 +1,5 @@
 /bin/
+/dist/
 /testbox/
 /tests/results/
 /.box/

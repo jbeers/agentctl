@@ -1,0 +1,150 @@
+name: CI and release
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  BOXLANG_VERSION: 1.13.0
+  BOXLANG_SHA256: 31edc363a60ea511a9d8ee66ce88baced03b54b6a237bd7c2de8f096b6e5cd29
+  COMMANDBOX_VERSION: 6.3.2
+  COMMANDBOX_SHA256: 6230ff89c6309d0303fbacf87c6adcf684240eee23003b0c5c283611115bb503
+  MATCHBOX_COMMIT: dc46ae9b890f9ad84013307eaaccbfbd19935a56
+  RUST_VERSION: 1.95.0
+
+jobs:
+  verify:
+    name: Test and build Linux amd64
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - name: Set up pinned Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '21.0.10+7'
+
+      - name: Install pinned BoxLang and CommandBox
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/boxlang" "$RUNNER_TEMP/commandbox"
+          curl --fail --location --retry 3 \
+            "https://downloads.ortussolutions.com/ortussolutions/boxlang/$BOXLANG_VERSION/boxlang-$BOXLANG_VERSION.zip" \
+            --output "$RUNNER_TEMP/boxlang.zip"
+          echo "$BOXLANG_SHA256  $RUNNER_TEMP/boxlang.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/boxlang.zip" -d "$RUNNER_TEMP/boxlang"
+          chmod +x "$RUNNER_TEMP/boxlang/bin/boxlang"
+
+          curl --fail --location --retry 3 \
+            "https://downloads.ortussolutions.com/ortussolutions/commandbox/$COMMANDBOX_VERSION/commandbox-bin-$COMMANDBOX_VERSION.zip" \
+            --output "$RUNNER_TEMP/commandbox.zip"
+          echo "$COMMANDBOX_SHA256  $RUNNER_TEMP/commandbox.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/commandbox.zip" -d "$RUNNER_TEMP/commandbox"
+          chmod +x "$RUNNER_TEMP/commandbox/box"
+
+          echo "$RUNNER_TEMP/boxlang/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/commandbox" >> "$GITHUB_PATH"
+
+      - name: Verify pinned application dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          boxlang --version | grep -F "v$BOXLANG_VERSION"
+          box version --no-ansi | grep -F "CommandBox $COMMANDBOX_VERSION"
+          jq -e '.devDependencies["bx-yaml"] == "1.0.0+2" and .devDependencies.testbox == "7.0.0+19"' box.json
+          box install
+
+      - name: Check whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          if git grep -nI -E '[[:blank:]]+$'; then
+            exit 1
+          fi
+
+      - name: Run TestBox and generated Bash checks
+        run: box run-script test
+
+      - name: Build pinned MatchBox
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustc "+$RUST_VERSION" --version | grep -F "rustc $RUST_VERSION"
+          git init -q "$RUNNER_TEMP/matchbox"
+          git -C "$RUNNER_TEMP/matchbox" remote add origin https://github.com/ortus-boxlang/matchbox.git
+          git -C "$RUNNER_TEMP/matchbox" fetch --depth 1 origin "$MATCHBOX_COMMIT"
+          git -C "$RUNNER_TEMP/matchbox" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/matchbox" rev-parse HEAD)" = "$MATCHBOX_COMMIT"
+          cargo "+$RUST_VERSION" build \
+            --release \
+            --locked \
+            --manifest-path "$RUNNER_TEMP/matchbox/Cargo.toml"
+          echo "MATCHBOX_BIN=$RUNNER_TEMP/matchbox/target/release/matchbox" >> "$GITHUB_ENV"
+
+      - name: Build and smoke-test the native release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          box run-script build
+          scripts/package-release dist
+
+      - name: Preserve tagged release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Publish immutable tagged release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release notes
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Download verified release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Publish the release once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(awk -F '"' '$2 == "version" { print $4; exit }' box.json)
+          test "$GITHUB_REF_NAME" = "v$version"
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          test -s "$notes"
+          (cd dist && sha256sum --check "agentctl-$version-linux-amd64.sha256")
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            printf 'release %s already exists; refusing to replace it\n' "$GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "agentctl $GITHUB_REF_NAME" \
+            --notes-file "$notes" \
+            --prerelease \
+            --verify-tag

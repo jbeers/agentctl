@@ -9,6 +9,9 @@ import src.services.SshService;
 import src.services.StatusService;
 import src.services.UpService;
 
+applicationVersion = "__AGENTCTL_VERSION__";
+sourceRevision = "__AGENTCTL_REVISION__";
+
 function usage(boolean errorStream = false) {
 	var lines = [
 		"agentctl",
@@ -42,6 +45,7 @@ function usage(boolean errorStream = false) {
 		"",
 		"Common options:",
 		"  --verbose",
+		"  --version",
 		"",
 		"Bundle selection is always explicit; agentctl does not scan the current directory."
 	];
@@ -106,6 +110,10 @@ function optionalConfirmedSecret(required string label) {
 }
 
 cli = cliGetArgs();
+if (structKeyExists(cli.options, "version")) {
+	systemOutput("agentctl " & applicationVersion & " (revision " & sourceRevision & ")", true);
+	exit(0);
+}
 if (structKeyExists(cli.options, "help") || structKeyExists(cli.options, "h")) {
 	usage();
 	exit(0);
