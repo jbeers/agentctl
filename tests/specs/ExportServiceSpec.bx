@@ -1,0 +1,401 @@
+import tests.support.FakeCommandRunner;
+
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("ExportService", () => {
+			it("exports populated state and restores it through the existing archive contract", () => {
+				var fixture = archiveFixture(false);
+				var outputDirectory = createTempDirectory(getSystemSetting("TMPDIR", "/tmp"), "agentctl-export-destination-");
+				var output = outputDirectory & "/state.tar";
+				var state = exportState(fixture.archive, output);
+				var runner = scriptedRunner(state);
+				var service = new src.services.ExportService(runner);
+				var restore = "";
+				var prepared = {};
+				try {
+					var result = service.exportState(resolvedBundle(), output, true);
+					var formatted = service.format(result);
+
+					expect(fileExists(output)).toBeTrue();
+					expect(fileMode(output)).toBe("600");
+					expect(state.secureModes).toBeTrue();
+					expect(state.events).toBe([ "check", "export", "receive", "cleanup" ]);
+					expect(find(output, formatted)).toBe(0);
+					expect(find(".hidden", formatted)).toBe(0);
+					expect(formatted).toInclude("not an independent backup");
+					expect(formatted).toInclude("archive path, entries, bytes, and digest omitted");
+					for (var call in runner.getCalls()) {
+						var argumentsText = jsonSerialize(call.arguments);
+						expect(find(".hidden", argumentsText)).toBe(0);
+						expect(find("executable.sh", argumentsText)).toBe(0);
+					}
+					for (var path in state.localTemporaryPaths) {
+						expect(fileExists(path)).toBeFalse();
+						if (find("agentctl-state-archive-", path) > 0 || find(".agentctl-export-received-", path) > 0) {
+							expect(getCanonicalPath(getDirectoryFromPath(path))).toBe(getCanonicalPath(outputDirectory));
+						}
+					}
+
+					var archives = new src.services.ArchiveService(runner);
+					prepared = archives.prepare(output, "state");
+					restore = createTempDirectory(getSystemSetting("TMPDIR", "/tmp"), "agentctl-export-restore-");
+					var extraction = runner.run(
+						"python3",
+						[ "-c", archives.validatorProgram(), "extract", prepared.temporaryPath, restore ]
+					);
+					expect(extraction.exitCode).toBe(0);
+					expect(fileRead(restore & "/.hidden")).toBe("hidden-state");
+					expect(fileMode(restore & "/nested/executable.sh")).toBe("755");
+					expect(trim(systemExecute("readlink", [ restore & "/link" ]).output)).toBe("nested/executable.sh");
+					expect(fileInode(restore & "/nested/executable.sh")).toBe(fileInode(restore & "/hard-link"));
+					expect(directoryExists(restore & "/lost+found")).toBeFalse();
+				} finally {
+					cleanupPrepared(prepared);
+					cleanupPath(restore);
+					cleanupPath(outputDirectory);
+					cleanupFixture(fixture);
+				}
+			});
+
+			it("exports empty state without a destination wrapper directory", () => {
+				var fixture = archiveFixture(true);
+				var output = unusedOutput();
+				var state = exportState(fixture.archive, output);
+				var runner = scriptedRunner(state);
+				var prepared = {};
+				var restore = "";
+				try {
+					new src.services.ExportService(runner).exportState(resolvedBundle(), output);
+					var archives = new src.services.ArchiveService(runner);
+					prepared = archives.prepare(output, "state");
+					restore = createTempDirectory(getSystemSetting("TMPDIR", "/tmp"), "agentctl-export-empty-");
+					var extracted = runner.run(
+						"python3",
+						[ "-c", archives.validatorProgram(), "extract", prepared.temporaryPath, restore ]
+					);
+					expect(extracted.exitCode).toBe(0);
+					expect(directoryList(restore)).toHaveLength(0);
+				} finally {
+					cleanupPrepared(prepared);
+					cleanupPath(restore);
+					cleanupPath(output);
+					cleanupFixture(fixture);
+				}
+			});
+
+			it("rejects output collisions and unready resources before remote mutation", () => {
+				var fixture = archiveFixture(true);
+				var existing = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-export-existing-", ".tar");
+				var existingDirectory = createTempDirectory(getSystemSetting("TMPDIR", "/tmp"), "agentctl-export-existing-directory-");
+				var danglingLink = unusedOutput();
+				systemExecute("ln", [ "-s", danglingLink & ".missing", danglingLink ]);
+				var absentOutput = unusedOutput();
+				var collisionState = exportState(fixture.archive, existing);
+				var collisionRunner = scriptedRunner(collisionState);
+				try {
+					for (var collision in [ existing, existingDirectory, danglingLink, "/dev/null" ]) {
+						expect(() => new src.services.ExportService(collisionRunner).exportState(
+							resolvedBundle(),
+							collision
+						)).toThrow(message="archive output must not already exist");
+					}
+					expect(commandCount(collisionRunner, "doctl")).toBe(0);
+
+					var absentState = exportState(fixture.archive, absentOutput);
+					absentState.agentAbsent = true;
+					var absentRunner = scriptedRunner(absentState);
+					expect(() => new src.services.ExportService(absentRunner).exportState(
+						resolvedBundle(),
+						absentOutput
+					)).toThrow(message="agent export requires one exact ready agent; run agent status with the same bundle");
+					expect(absentState.events).toHaveLength(0);
+					expect(fileExists(absentOutput)).toBeFalse();
+				} finally {
+					cleanupPath(existing);
+					cleanupPath(existingDirectory);
+					systemExecute("rm", [ "-f", "--", danglingLink ]);
+					cleanupPath(absentOutput);
+					cleanupFixture(fixture);
+				}
+			});
+
+			it("restores runtime intent and removes partial files after export, transfer, or validation failures", () => {
+				failureLeavesNoArchive({ exportCode : 20 }, "stopping Hermes safely failed; state export was aborted");
+				failureLeavesNoArchive({ transferFailure : true }, "receiving the state archive failed");
+				failureLeavesNoArchive({ transferThrows : true }, "receiving the state archive failed");
+				failureLeavesNoArchive({ invalidArchive : true }, "state archive contains unsafe or invalid entries");
+			});
+
+			it("preserves a validated archive when gateway restart health fails", () => {
+				var fixture = archiveFixture(false);
+				var output = unusedOutput();
+				var state = exportState(fixture.archive, output);
+				state.exportCode = 32;
+				var runner = scriptedRunner(state);
+				try {
+					expect(() => new src.services.ExportService(runner).exportState(
+						resolvedBundle(),
+						output
+					)).toThrow(message="Hermes gateway health was not restored after state export; the validated archive was preserved");
+					expect(fileExists(output)).toBeTrue();
+					expect(fileMode(output)).toBe("600");
+					expect(state.events).toBe([ "check", "export", "receive", "cleanup" ]);
+				} finally {
+					cleanupPath(output);
+					cleanupFixture(fixture);
+				}
+			});
+
+			it("refuses a destination created concurrently without overwriting it", () => {
+				var fixture = archiveFixture(false);
+				var output = unusedOutput();
+				var state = exportState(fixture.archive, output);
+				state.createCollision = true;
+				var runner = scriptedRunner(state);
+				try {
+					expect(() => new src.services.ExportService(runner).exportState(
+						resolvedBundle(),
+						output
+					)).toThrow(message="archive output must not already exist");
+					expect(fileRead(output)).toBe("collision-sentinel");
+					expect(state.events).toBe([ "check", "export", "receive", "cleanup" ]);
+				} finally {
+					cleanupPath(output);
+					cleanupFixture(fixture);
+				}
+			});
+
+			it("generates syntax-valid bounded stop, archive, restart, and signal recovery Bash", () => {
+				var script = new src.services.ExportService(new FakeCommandRunner()).exportScript();
+				var path = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-export-script-", ".sh");
+				try {
+					fileWrite(path, script);
+					expect(systemExecute("bash", [ "-n", path ]).exitCode).toBe(0);
+					expect(find("podman_as_agent stop --time 30", script)).toBeLT(find("sync || exit 21", script));
+					expect(find("sync || exit 21", script)).toBeLT(find("tar --create", script));
+					expect(find("tar --create", script)).toBeLT(find("restart_hermes", script, find("tar --create", script)));
+					expect(script).toInclude("trap restore_on_exit EXIT");
+					expect(script).toInclude("--exclude=./lost+found");
+					expect(script).toInclude('tar --create --file "$archive_path" --directory "$mount_dir"');
+				} finally {
+					cleanupPath(path);
+				}
+			});
+		});
+	}
+
+	private function failureLeavesNoArchive(required struct flags, required string expectedMessage) {
+		var fixture = archiveFixture(false);
+		if (structKeyExists(arguments.flags, "invalidArchive") && arguments.flags.invalidArchive) {
+			fileWrite(fixture.archive, "not a tar archive");
+		}
+		var output = unusedOutput();
+		var state = exportState(fixture.archive, output);
+		for (var key in structKeyArray(arguments.flags)) state[key] = arguments.flags[key];
+		var runner = scriptedRunner(state);
+		try {
+			var failed = false;
+			try {
+				new src.services.ExportService(runner).exportState(resolvedBundle(), output);
+			} catch (error) {
+				failed = true;
+				var message = structKeyExists(error, "message") ? error.message : "";
+				expect(message).toBe(arguments.expectedMessage);
+				expect(find(output, message)).toBe(0);
+				expect(find("hidden-state", message)).toBe(0);
+			}
+			expect(failed).toBeTrue();
+			expect(fileExists(output)).toBeFalse();
+			expect(state.events).toInclude("cleanup");
+			for (var path in state.localTemporaryPaths) expect(fileExists(path)).toBeFalse();
+		} finally {
+			cleanupPath(output);
+			cleanupFixture(fixture);
+		}
+	}
+
+	private function scriptedRunner(required struct state) {
+		var handler = (executable, commandArguments, input) => {
+			if (arguments.executable == "test" || arguments.executable == "ln") {
+				return systemExecute(arguments.executable, arguments.commandArguments);
+			}
+			if (arguments.executable == "python3") {
+				if (state.createCollision && arguments.commandArguments[3] == "prepare" && !fileExists(state.output)) {
+					fileWrite(state.output, "collision-sentinel");
+					state.createCollision = false;
+				}
+				var destination = arguments.commandArguments[arrayLen(arguments.commandArguments)];
+				if (find("agentctl-state-archive-", destination) > 0) {
+					arrayAppend(state.localTemporaryPaths, destination);
+					if (fileMode(destination) != "600") state.secureModes = false;
+				}
+				return systemExecute(arguments.executable, arguments.commandArguments);
+			}
+			if (arguments.executable == "doctl") {
+				var command = joinValues(arguments.commandArguments, " ");
+				if (find("droplet list", command) > 0) {
+					if (state.agentAbsent) return success();
+					return success("101 rotate-agent active");
+				}
+				if (find("volume list", command) > 0) return success("vol-1 agent-home-rotate-agent fra1 10");
+				if (find("volume get", command) > 0) return success("101");
+			}
+			if (arguments.executable == "ssh-keygen") {
+				var identityPath = arguments.commandArguments[arrayLen(arguments.commandArguments)];
+				arrayAppend(state.localTemporaryPaths, identityPath);
+				if (fileMode(identityPath) != "600") state.secureModes = false;
+				return success("ssh-ed25519 AAAATESTPUBLIC agentctl:rotate-agent");
+			}
+			if (arguments.executable == "ssh") {
+				var command = joinValues(arguments.commandArguments, " ");
+				if (!isNull(arguments.input)) {
+					if (find("podman container inspect", arguments.input) > 0) return success("running");
+					return success();
+				}
+				if (find(" /bin/bash ", " " & command & " ") > 0 && find(" check ", " " & command & " ") > 0) {
+					arrayAppend(state.events, "check");
+					return success();
+				}
+				if (find(" /bin/bash ", " " & command & " ") > 0 && find(" export ", " " & command & " ") > 0) {
+					arrayAppend(state.events, "export");
+					return response(state.exportCode);
+				}
+				if (find("/bin/rm -f --", command) > 0) {
+					arrayAppend(state.events, "cleanup");
+					return success();
+				}
+				return success();
+			}
+			if (arguments.executable == "scp") {
+				var count = arrayLen(arguments.commandArguments);
+				var source = arguments.commandArguments[count - 1];
+				var destination = arguments.commandArguments[count];
+				if (find("root@", source) == 1) {
+					arrayAppend(state.events, "receive");
+					arrayAppend(state.localTemporaryPaths, destination);
+					if (fileMode(destination) != "600") state.secureModes = false;
+					if (state.transferThrows) throw "interrupted transfer";
+					if (state.transferFailure) return failure();
+					fileCopy(state.archive, destination);
+					return success();
+				}
+				arrayAppend(state.localTemporaryPaths, source);
+				if (fileMode(source) != "600") state.secureModes = false;
+				return success();
+			}
+			return success();
+		};
+		return new FakeCommandRunner([], true, handler);
+	}
+
+	private function exportState(required string archive, required string output) {
+		return {
+			archive : arguments.archive,
+			output : arguments.output,
+			events : [],
+			localTemporaryPaths : [],
+			agentAbsent : false,
+			exportCode : 0,
+			transferFailure : false,
+			transferThrows : false,
+			createCollision : false,
+			secureModes : true
+		};
+	}
+
+	private function resolvedBundle() {
+		var plan = new src.services.BundleService().parse({
+			version : 2,
+			identity : { name : "rotate-agent" },
+			compute : { region : "fra1" },
+			state : { size : "10GiB" },
+			access : { hostname : "rotate-agent" }
+		});
+		return {
+			plan : plan,
+			secretValues : {
+				sshPrivateKey : "-----BEGIN OPENSSH PRIVATE KEY-----" & char(10) & "fixture" & char(10) & "-----END OPENSSH PRIVATE KEY-----" & char(10)
+			}
+		};
+	}
+
+	private function archiveFixture(required boolean empty) {
+		var source = createTempDirectory(getSystemSetting("TMPDIR", "/tmp"), "agentctl-export-source-");
+		var archive = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-export-fixture-", ".tar");
+		directoryCreate(source & "/lost+found");
+		if (!arguments.empty) {
+			directoryCreate(source & "/nested");
+			fileWrite(source & "/.hidden", "hidden-state");
+			fileWrite(source & "/nested/executable.sh", "##!/usr/bin/env bash" & char(10) & "exit 0" & char(10));
+			fileSetAccessMode(source & "/nested/executable.sh", "755");
+			systemExecute("ln", [ "-s", "nested/executable.sh", source & "/link" ]);
+			systemExecute("ln", [ source & "/nested/executable.sh", source & "/hard-link" ]);
+		}
+		var result = systemExecute(
+			"tar",
+			[ "--create", "--file", archive, "--directory", source, "--exclude=./lost+found", "." ]
+		);
+		if (result.exitCode != 0) throw "could not create export fixture";
+		fileSetAccessMode(archive, "600");
+		return { source : source, archive : archive };
+	}
+
+	private function unusedOutput() {
+		var path = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-export-output-", ".tar");
+		fileDelete(path);
+		return path;
+	}
+
+	private function cleanupPrepared(required struct prepared) {
+		if (!structIsEmpty(arguments.prepared) && fileExists(arguments.prepared.temporaryPath)) {
+			fileDelete(arguments.prepared.temporaryPath);
+		}
+	}
+
+	private function cleanupFixture(required struct fixture) {
+		cleanupPath(arguments.fixture.archive);
+		cleanupPath(arguments.fixture.source);
+	}
+
+	private function cleanupPath(string path = "") {
+		if (arguments.path == "") return;
+		if (directoryExists(arguments.path)) directoryDelete(arguments.path, true);
+		else if (fileExists(arguments.path)) fileDelete(arguments.path);
+	}
+
+	private function commandCount(required any runner, required string executable) {
+		var count = 0;
+		for (var call in arguments.runner.getCalls()) if (call.executable == arguments.executable) count++;
+		return count;
+	}
+
+	private function fileMode(required string path) {
+		return trim(systemExecute("stat", [ "-c", "%a", arguments.path ]).output);
+	}
+
+	private function fileInode(required string path) {
+		return trim(systemExecute("stat", [ "-c", "%i", arguments.path ]).output);
+	}
+
+	private function success(string output = "") {
+		return { exitCode : 0, output : arguments.output, error : "", timeout : false };
+	}
+
+	private function response(required numeric code) {
+		return { exitCode : arguments.code, output : "", error : "private-state-must-not-leak", timeout : false };
+	}
+
+	private function failure() {
+		return response(1);
+	}
+
+	private function joinValues(required array values, required string delimiter) {
+		var result = "";
+		for (var index = 1; index <= arrayLen(arguments.values); index++) {
+			result &= (index == 1 ? "" : arguments.delimiter) & arguments.values[index];
+		}
+		return result;
+	}
+
+}

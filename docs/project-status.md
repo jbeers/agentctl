@@ -14,11 +14,12 @@ The completed implementation can:
 - Open private SSH repair access and the Hermes dashboard.
 - Run Hermes terminal, file, patch, and rootless Compose workflows under `/workdir`.
 - Restore validated state and workspace archives into separate empty destinations.
+- Export ready `/opt/data` state into a validated, atomic, portable archive.
 - Rotate supported SOPS-encrypted bundle credentials through a write-only, atomic workflow.
 - Stop Hermes, flush and unmount state, delete compute, and retain the provider volume.
 - Rebuild disposable compute while preserving `/opt/data` and discarding `/workdir`.
 
-The V2 lifecycle paths passed deterministic tests, the live DigitalOcean/Tailscale exercise, and a separate clean-room exercise using only the public `v0.1.0-alpha.2` release and public runtime. Credential rotation additionally passed deterministic and real-SOPS local acceptance; it awaits the next published executable. No VM received manual repair.
+The V2 lifecycle paths passed deterministic tests, the live DigitalOcean/Tailscale exercise, and a separate clean-room exercise using only the public `v0.1.0-alpha.2` release and public runtime. Current-source credential rotation additionally passed deterministic and real-SOPS local acceptance; state export passed deterministic archive round-trip and failure acceptance. Both await the next published executable. No VM received manual repair.
 
 ## Current supported boundary
 
@@ -35,10 +36,10 @@ The V2 lifecycle paths passed deterministic tests, the live DigitalOcean/Tailsca
 
 - Linux `amd64` is the only supported operator release target.
 - The retained provider volume is durable working storage, **not an independent backup**.
-- State archives can be restored, but `agentctl` cannot yet export state.
+- State export is deliberate and local; there is no automatic schedule, remote backup destination, or provider snapshot workflow.
 - `down` deletes the Droplet but deliberately retains the billable volume. Complete volume deletion currently requires a separately reviewed provider operation; guarded purge is roadmap work.
 - `/workdir`, uncommitted source, and ordinary Compose volumes disappear with the Droplet. Hermes and the operator own Git commit and push safety.
-- The published `v0.1.0-alpha.2` executable predates `agent rotate`; use the next release or SOPS directly with appropriate care.
+- The published `v0.1.0-alpha.2` executable predates `agent rotate` and `agent export`; use the next release for those commands.
 - There is no idle shutdown, NAS control plane, admin-agent integration, public ingress, repository manager, or second cloud provider.
 - The project has not received a third-party security audit.
 
@@ -53,4 +54,4 @@ Removing the local `agentctl` executable or encrypted bundle does not remove pro
 - [Completed V2 lifecycle](https://github.com/jbeers/agentctl/blob/main/v2/README.md)
 - [Public product roadmap](https://github.com/jbeers/agentctl/blob/main/v3/README.md)
 
-Remaining public-alpha work adds state export, guarded purge, JSON status, and the final public-alpha end-to-end proof.
+Remaining public-alpha work adds guarded purge, JSON status, and the final public-alpha end-to-end proof.

@@ -21,7 +21,7 @@ class {
 		}
 
 		var action = positionals[2];
-		if (action != "inspect" && action != "init" && action != "doctor" && action != "rotate" && action != "up" && action != "status" && action != "open" && action != "ssh" && action != "down") {
+		if (action != "inspect" && action != "init" && action != "doctor" && action != "rotate" && action != "export" && action != "up" && action != "status" && action != "open" && action != "ssh" && action != "down") {
 			return invalid("unknown agent command '" & action & "'");
 		}
 		if (arrayLen(positionals) > 2) {
@@ -36,9 +36,11 @@ class {
 					"file,region,size,hostname,runtime-image,state-archive,workspace-archive,verbose" :
 					action == "rotate" ?
 						"file,credential,remove,verbose" :
-						(action == "status" || action == "open" || action == "ssh" || action == "down") ?
-							"file,hostname,verbose" :
-							"file,verbose";
+						action == "export" ?
+							"file,output,verbose" :
+							(action == "status" || action == "open" || action == "ssh" || action == "down") ?
+								"file,hostname,verbose" :
+								"file,verbose";
 		for (var optionName in structKeyArray(options)) {
 			if (listFindNoCase(allowed, optionName) == 0) {
 				return invalid(
@@ -72,6 +74,9 @@ class {
 		if (action == "rotate" && !structKeyExists(options, "credential")) {
 			return invalid("agent rotate requires '--credential'");
 		}
+		if (action == "export" && !structKeyExists(options, "output")) {
+			return invalid("agent export requires '--output'");
+		}
 
 		var result = {
 			valid : true,
@@ -89,6 +94,10 @@ class {
 			if (result.remove && result.credential != "registry-token") {
 				return invalid("--remove is supported only for the registry-token credential");
 			}
+			return result;
+		}
+		if (action == "export") {
+			result.outputPath = trim(options.output);
 			return result;
 		}
 		if (action == "doctor") {

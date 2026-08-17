@@ -12,6 +12,8 @@ This command is destructive: the Droplet and its `/workdir` are deleted. The pro
 
 Hermes and the operator are responsible for committing and pushing work that must survive. `agentctl` does not inspect Git, determine whether `/workdir` is clean, or back up `/workdir`.
 
+If you need a portable copy of retained Hermes state, run [`agent export`](archives.md#export-a-ready-agent) while the appliance is still fully ready. `down` does not export automatically, and export intentionally excludes `/workdir`.
+
 ## Shutdown sequence
 
 When the exact-name Droplet exists, `down`:

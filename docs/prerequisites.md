@@ -112,7 +112,7 @@ Install these normal operator tools:
 - `ssh`, `scp`, and `ssh-keygen` from OpenSSH
 - `xdg-open` and a browser capable of reaching tailnet HTTP addresses
 - `curl` and `sha256sum` for release installation
-- `python3` only when restoring state or workspace archives
+- `python3` when exporting or restoring state, or when seeding a workspace archive
 
 Check the commands without printing credentials:
 

@@ -140,8 +140,11 @@ Common focused errors include:
 - Restore only into fresh destinations. Archives never merge with retained `/opt/data` or an existing `/workdir`.
 - Do not weaken validation for absolute paths, traversal, escaping links, devices, FIFOs, or sockets.
 - When both archives are requested, correct both before retrying; failed extraction cleanup keeps Hermes stopped.
+- Before export, require `agent status` to report `ready` and choose an output path that does not exist.
+- An export stop, synchronization, transfer, or validation failure leaves the requested output absent and makes a bounded Hermes restart attempt.
+- If export reports a container, Tailscale, gateway, or dashboard recovery failure **and** says the validated archive was preserved, keep that archive and repair the named runtime layer before retrying with a new destination.
 
-Normal output omits paths and contents. Treat archive filenames, hashes, and verbose output as private. See [Restore state and seed a workspace](archives.md).
+Normal output omits paths and contents. Treat archive filenames, hashes, and verbose output as private. See [Export and restore state archives](archives.md).
 
 ## Safe recovery and support
 

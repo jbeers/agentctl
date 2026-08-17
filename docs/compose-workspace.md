@@ -2,7 +2,7 @@
 
 Hermes works from `/workdir`, which is the same absolute path on the VM host and inside the Hermes container. The directory is writable by Hermes but lives on disposable Droplet storage. Commit and push work that must survive `agent down`.
 
-Seed a fresh workspace before Hermes starts with `agent up --workspace-archive <tar-path>`. The archive extracts directly under empty `/workdir`; it is never merged into existing files. `agentctl` does not inspect or alter Git metadata in the archive, and seeding does not make the workspace persistent. See [Restore state and seed a workspace](archives.md).
+Seed a fresh workspace before Hermes starts with `agent up --workspace-archive <tar-path>`. The archive extracts directly under empty `/workdir`; it is never merged into existing files. `agentctl` does not inspect or alter Git metadata in the archive, and seeding does not make the workspace persistent. See [Export and restore state archives](archives.md).
 
 The launcher enforces these deployment-owned settings on every `agent up`:
 

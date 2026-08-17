@@ -123,6 +123,29 @@ class extends="testbox.system.BaseSpec" {
 				}).error).toBe("--remove is supported only for the registry-token credential");
 			});
 
+			it("parses state export with explicit bundle and output paths", () => {
+				var result = parser.parse({
+					positionals : [ "agent", "export" ],
+					options : { file : "agent.yml", output : "backups/state.tar", verbose : true }
+				});
+				expect(result.valid).toBeTrue();
+				expect(result.action).toBe("export");
+				expect(result.outputPath).toBe("backups/state.tar");
+				expect(result.verbose).toBeTrue();
+				expect(parser.parse({
+					positionals : [ "agent", "export" ],
+					options : { output : "state.tar" }
+				}).error).toBe("agent export requires '--file'");
+				expect(parser.parse({
+					positionals : [ "agent", "export" ],
+					options : { file : "agent.yml" }
+				}).error).toBe("agent export requires '--output'");
+				expect(parser.parse({
+					positionals : [ "agent", "export" ],
+					options : { file : "agent.yml", output : "state.tar", hostname : "other" }
+				}).error).toBe("unknown option '--hostname' for agent export");
+			});
+
 			it("parses up with an explicit bundle and public overrides", () => {
 				var result = parser.parse({
 					positionals : [ "agent", "up" ],

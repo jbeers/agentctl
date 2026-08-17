@@ -52,7 +52,7 @@ Hermes starts in `/workdir`, and its canonical local terminal directory is pinne
 
 `up` can restore a validated state archive into fresh `/opt/data`, seed a validated project archive into fresh `/workdir`, or perform both checks and extractions before Hermes starts. Restoration never merges with existing content, and every archive is treated as secret-bearing.
 
-See [Restore state and seed a workspace](archives.md) for the complete format, validation, empty-target, cleanup, and persistence contract.
+See [Export and restore state archives](archives.md) for the complete format, validation, empty-target, cleanup, and persistence contract.
 
 ## Credential boundaries
 

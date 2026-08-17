@@ -54,6 +54,6 @@ Until guarded `agent purge` exists, complete cleanup requires a separate, delibe
 
 A retained provider volume is working durability, not an independent backup. A provider/account failure, accidental deletion, or corrupted filesystem can still destroy it.
 
-`agentctl` currently validates and restores state archives but does not yet export `/opt/data`. Use a separately reviewed backup procedure for important state until the planned export workflow is released. Treat every state archive as secret-bearing because it may contain model credentials, GitHub authentication, Hermes configuration, and conversation history.
+`agentctl agent export` creates a validated, portable mode-`0600` archive of `/opt/data` while a ready agent is running. It is a deliberate point-in-time copy, not an automatic backup schedule or provider snapshot. Treat every state archive as secret-bearing because it may contain model credentials, GitHub authentication, Hermes configuration, and conversation history. See [Export and restore state archives](archives.md).
 
 Workspace archives seed only a fresh `/workdir`; they do not change its disposable lifetime. Git remains the normal persistence path for projects.

@@ -14,7 +14,7 @@ This roadmap does **not** introduce a V3 bundle schema. Existing version 2 bundl
 | 004 | [Complete a clean-room first-agent guide](issues/004-complete-clean-room-first-agent-guide.md) | HITL | Complete | 002, 003 |
 | 005 | [Launch the docs-first agentctl website](issues/005-launch-docs-first-agentctl-website.md) | AFK | Complete | 004 |
 | 006 | [Rotate encrypted agent credentials safely](issues/006-rotate-encrypted-agent-credentials-safely.md) | AFK | Complete | 001 |
-| 007 | [Export portable Hermes state](issues/007-export-portable-hermes-state.md) | AFK | Pending | 001 |
+| 007 | [Export portable Hermes state](issues/007-export-portable-hermes-state.md) | AFK | Complete | 001 |
 | 008 | [Purge retained state safely](issues/008-purge-retained-state-safely.md) | HITL | Pending | 007 |
 | 009 | [Expose layered status as JSON](issues/009-expose-layered-status-as-json.md) | AFK | Pending | 001 |
 | 010 | [Prove the public alpha end to end](issues/010-prove-public-alpha-end-to-end.md) | HITL | Pending | 002–009 |

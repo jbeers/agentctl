@@ -5,7 +5,7 @@ class {
 		return this;
 	}
 
-	function prepare(required string path, string archiveType = "state") {
+	function prepare(required string path, string archiveType = "state", string temporaryDirectory = "") {
 		var type = lCase(trim(arguments.archiveType));
 		if (listFind("state,workspace", type) == 0) fail("archive type must be state or workspace");
 		if (trim(arguments.path) == "") fail("--" & type & "-archive requires a non-empty path");
@@ -18,7 +18,10 @@ class {
 			if (right(operatorDirectory, 1) != "/") operatorDirectory &= "/";
 			sourcePath = operatorDirectory & sourcePath;
 		}
-		var temporaryPath = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-" & type & "-archive-", ".tar");
+		var stagingDirectory = trim(arguments.temporaryDirectory) == "" ?
+			getSystemSetting("TMPDIR", "/tmp") : arguments.temporaryDirectory;
+		if (!directoryExists(stagingDirectory)) fail("archive staging directory does not exist");
+		var temporaryPath = createTempFile(getCanonicalPath(stagingDirectory), "agentctl-" & type & "-archive-", ".tar");
 		try {
 			fileSetAccessMode(temporaryPath, "600");
 		} catch (error) {

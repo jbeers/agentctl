@@ -1,0 +1,392 @@
+class {
+
+	function init(required any commandRunner) {
+		variables.runner = arguments.commandRunner;
+		return this;
+	}
+
+	function exportState(required struct resolved, required string outputPath, boolean verbose = false) {
+		var destination = outputTarget(arguments.outputPath);
+		for (var tool in [ "doctl", "ssh", "scp", "ssh-keygen", "python3" ]) {
+			if (!variables.runner.isAvailable(tool)) fail(tool & " is required to export agent state");
+		}
+
+		var status = new src.services.StatusService(variables.runner).check(arguments.resolved);
+		if (!status.ready) {
+			fail("agent export requires one exact ready agent; run agent status with the same bundle");
+		}
+
+		var plan = arguments.resolved.plan;
+		var identityService = new src.services.SshIdentityService(variables.runner);
+		var archiveService = new src.services.ArchiveService(variables.runner);
+		var identity = {};
+		var scriptPath = "";
+		var receivedPath = "";
+		var prepared = {};
+		var remoteScript = remoteTempPath(".sh");
+		var remoteArchive = remoteTempPath(".tar");
+		var remoteCleanupNeeded = false;
+		var runtimeFailure = "";
+		var cleanupFailed = false;
+		try {
+			identity = identityService.prepare(arguments.resolved.secretValues.sshPrivateKey, "agentctl-export-ssh-");
+			var sshOptions = buildSshArguments(identity.path);
+			var target = "root@" & plan.values.hostname.value;
+			scriptPath = secureTempFile("agentctl-export-", ".sh", exportScript());
+			remoteCleanupNeeded = true;
+			copyToRemote(scriptPath, remoteScript, target, sshOptions);
+
+			var check = executeSsh(
+				sshOptions,
+				target,
+				[ "/bin/bash", remoteScript, "check", plan.values.name.value, remoteArchive ],
+				30
+			);
+			if (!succeeded(check)) {
+				fail("remote state export prerequisites are not satisfied");
+			}
+
+			var exported = executeSsh(
+				sshOptions,
+				target,
+				[ "/bin/bash", remoteScript, "export", plan.values.name.value, remoteArchive ]
+			);
+			var exportCode = resultCode(exported);
+			if (exportCode >= 30 && exportCode <= 33) {
+				runtimeFailure = restartFailure(exportCode);
+			} else if (!succeeded(exported)) {
+				fail(exportFailure(exported));
+			}
+
+			receivedPath = createTempFile(destination.directory, ".agentctl-export-received-", ".tar");
+			fileSetAccessMode(receivedPath, "600");
+			copyFromRemote(remoteArchive, receivedPath, target, sshOptions);
+			fileSetAccessMode(receivedPath, "600");
+			if (removeRemote([ remoteArchive, remoteScript ], target, sshOptions)) remoteCleanupNeeded = false;
+			prepared = archiveService.prepare(receivedPath, "state", destination.directory);
+			deleteSensitiveFile(receivedPath);
+			receivedPath = "";
+			publishExclusive(prepared.temporaryPath, destination.path);
+			prepared = {};
+			if (runtimeFailure != "") fail(runtimeFailure & "; the validated archive was preserved");
+
+			return {
+				volumeName : plan.derived.volumeName,
+				verbose : arguments.verbose
+			};
+		} finally {
+			if (remoteCleanupNeeded && !structIsEmpty(identity)) {
+				try {
+					if (!removeRemote([ remoteArchive, remoteScript ], "root@" & plan.values.hostname.value, buildSshArguments(identity.path))) {
+						cleanupFailed = true;
+					}
+				} catch (error) {
+					cleanupFailed = true;
+				}
+			}
+			for (var path in [
+				receivedPath,
+				structIsEmpty(prepared) ? "" : prepared.temporaryPath,
+				scriptPath
+			]) {
+				try {
+					deleteSensitiveFile(path);
+				} catch (error) {
+					cleanupFailed = true;
+				}
+			}
+			if (!structIsEmpty(identity)) {
+				try {
+					identityService.remove(identity.path);
+				} catch (error) {
+					cleanupFailed = true;
+				}
+			}
+			if (cleanupFailed && runtimeFailure == "") fail("removing temporary state export files failed");
+		}
+	}
+
+	function format(required struct result) {
+		var lines = [
+			"Exported durable Hermes state to the requested archive.",
+			"  Archive: validated and published atomically at mode 0600",
+			"  Source: /opt/data on provider volume " & arguments.result.volumeName,
+			"  Hermes runtime: restarted; gateway and dashboard healthy",
+			"  Provider volume: retained as working state, not an independent backup"
+		];
+		if (arguments.result.verbose) {
+			arrayAppend(lines, "  Transfer: private SSH/SCP route; archive path, entries, bytes, and digest omitted");
+		}
+		return joinValues(lines, char(10));
+	}
+
+	function exportScript() {
+		return joinValues([
+			'##!/usr/bin/env bash',
+			'set -uo pipefail',
+			'umask 077',
+			'action=${1:-}',
+			'agent_name=${2:-}',
+			'archive_path=${3:-}',
+			'[[ $action == check || $action == export ]] || exit 10',
+			'[[ $agent_name =~ ^[a-z0-9][a-z0-9-]*$ ]] || exit 10',
+			'[[ $archive_path =~ ^/tmp/agentctl-export-[a-z0-9]+[.]tar$ ]] || exit 10',
+			'mount_dir="/agent-dirs/$agent_name"',
+			'for command in id getent runuser podman tar sync find curl tailscale sleep findmnt head cut chmod env rm; do',
+			'  command -v "$command" >/dev/null 2>&1 || exit 11',
+			'done',
+			'[[ $(findmnt -n -o TARGET --target "$mount_dir" 2>/dev/null) == "$mount_dir" ]] || exit 10',
+			'id agent >/dev/null 2>&1 || exit 11',
+			'agent_uid=$(id -u agent)',
+			'agent_home=$(getent passwd agent | cut -d: -f6)',
+			'[[ -n $agent_home && -d $agent_home ]] || exit 11',
+			'podman_as_agent() {',
+			'  (cd "$agent_home" && runuser -u agent -- env HOME="$agent_home" XDG_RUNTIME_DIR="/run/user/$agent_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$agent_uid/bus" podman "$@")',
+			'}',
+			'container_state() { podman_as_agent container inspect --format "{{.State.Status}}" hermes 2>/dev/null; }',
+			'restart_hermes() {',
+			'  local state tailscale_ip gateway dashboard',
+			'  state=$(container_state) || return 30',
+			'  if [[ $state != running ]]; then',
+			'    podman_as_agent start hermes >/dev/null 2>&1 || return 30',
+			'  fi',
+			'  tailscale_ip=$(tailscale ip -4 | head -n 1)',
+			'  [[ -n $tailscale_ip ]] || return 31',
+			'  gateway=0',
+			'  dashboard=0',
+			'  for _ in {1..60}; do',
+			'    curl --fail --silent --show-error --max-time 5 "http://$tailscale_ip:8642/health" >/dev/null 2>&1 && gateway=1 || gateway=0',
+			'    curl --fail --silent --show-error --max-time 5 "http://$tailscale_ip:9119/" >/dev/null 2>&1 && dashboard=1 || dashboard=0',
+			'    (( gateway == 1 && dashboard == 1 )) && return 0',
+			'    sleep 1',
+			'  done',
+			'  (( gateway == 1 )) || return 32',
+			'  return 33',
+			'}',
+			'lost_found="$mount_dir/lost+found"',
+			'exclude_args=()',
+			'if [[ -e $lost_found || -L $lost_found ]]; then',
+			'  [[ -d $lost_found && ! -L $lost_found ]] || exit 13',
+			'  [[ -z $(find "$lost_found" -mindepth 1 -print -quit 2>/dev/null) ]] || exit 13',
+			'  exclude_args=(--exclude=./lost+found)',
+			'fi',
+			'[[ ! -e $archive_path && ! -L $archive_path ]] || exit 14',
+			'[[ $(container_state) == running ]] || exit 12',
+			'if [[ $action == check ]]; then exit 0; fi',
+			'stop_attempted=1',
+			'archive_complete=0',
+			'restore_on_exit() {',
+			'  if (( archive_complete == 0 )); then rm -f -- "$archive_path"; fi',
+			'  if (( stop_attempted == 1 )); then',
+			'    restart_hermes >/dev/null 2>&1 && stop_attempted=0 || true',
+			'  fi',
+			'}',
+			'trap restore_on_exit EXIT',
+			'trap "exit 24" HUP INT TERM',
+			'podman_as_agent stop --time 30 hermes >/dev/null 2>&1 || exit 20',
+			'sync || exit 21',
+			'tar --create --file "$archive_path" --directory "$mount_dir" "${exclude_args[@]}" . >/dev/null 2>&1 || exit 22',
+			'chmod 0600 "$archive_path" || exit 23',
+			'sync "$archive_path" || exit 23',
+			'archive_complete=1',
+			'restart_hermes',
+			'restart_code=$?',
+			'stop_attempted=0',
+			'trap - EXIT HUP INT TERM',
+			'exit "$restart_code"'
+		], char(10)) & char(10);
+	}
+
+	private function outputTarget(required string path) {
+		var normalized = replace(arguments.path, "\", "/", "all");
+		if (
+			trim(normalized) == "" ||
+			right(normalized, 1) == "/" ||
+			arrayLen(reMatch("[[:cntrl:]]", normalized)) > 0
+		) {
+			fail("agent export requires '--output' to name a previously absent file");
+		}
+		var parts = listToArray(normalized, "/", false, true);
+		var fileName = parts[arrayLen(parts)];
+		if (fileName == "." || fileName == "..") {
+			fail("agent export requires '--output' to name a previously absent file");
+		}
+		var directory = find("/", normalized) == 0 ? "." : getDirectoryFromPath(arguments.path);
+		if (!directoryExists(directory)) fail("archive output directory does not exist");
+		var canonicalDirectory = getCanonicalPath(directory);
+		var target = canonicalDirectory & (right(canonicalDirectory, 1) == "/" ? "" : "/") & fileName;
+		if (pathTest("-e", target) || pathTest("-L", target)) {
+			fail("archive output must not already exist");
+		}
+		return { path : target, directory : canonicalDirectory };
+	}
+
+	private function pathTest(required string flag, required string path) {
+		var result = {};
+		try {
+			result = variables.runner.run("test", [ arguments.flag, arguments.path ]);
+		} catch (error) {
+			fail("could not validate the archive output target");
+		}
+		return succeeded(result);
+	}
+
+	private function exportFailure(required struct result) {
+		if (structKeyExists(arguments.result, "timeout") && arguments.result.timeout) return "remote state export timed out";
+		var code = resultCode(arguments.result);
+		if (code == 10) return "persistent state is not mounted as expected; state export was refused";
+		if (code == 11) return "remote state export prerequisites are unavailable";
+		if (code == 12) return "Hermes was not running at the start of state export";
+		if (code == 13) return "persistent-state lost+found is not empty or safe; state export was refused";
+		if (code == 14) return "remote state export temporary path was not empty";
+		if (code == 20) return "stopping Hermes safely failed; state export was aborted";
+		if (code == 21) return "flushing persistent-state filesystem writes failed; state export was aborted";
+		if (code == 22 || code == 23) return "creating the remote state archive failed";
+		if (code == 24) return "remote state export was interrupted";
+		return "remote state export failed";
+	}
+
+	private function restartFailure(required numeric code) {
+		if (arguments.code == 30) return "Hermes container did not restart after state export";
+		if (arguments.code == 31) return "Tailscale health could not be checked after state export";
+		if (arguments.code == 32) return "Hermes gateway health was not restored after state export";
+		return "Hermes dashboard health was not restored after state export";
+	}
+
+	private function copyToRemote(required string localPath, required string remotePath, required string target, required array sshOptions) {
+		var result = {};
+		try {
+			result = variables.runner.run(
+				"scp",
+				appendArguments(arguments.sshOptions, [ "-p", arguments.localPath, arguments.target & ":" & arguments.remotePath ])
+			);
+		} catch (error) {
+			fail("copying the temporary state export script failed");
+		}
+		if (!succeeded(result)) fail("copying the temporary state export script failed");
+	}
+
+	private function copyFromRemote(required string remotePath, required string localPath, required string target, required array sshOptions) {
+		var result = {};
+		try {
+			result = variables.runner.run(
+				"scp",
+				appendArguments(arguments.sshOptions, [ "-p", arguments.target & ":" & arguments.remotePath, arguments.localPath ])
+			);
+		} catch (error) {
+			fail("receiving the state archive failed");
+		}
+		if (!succeeded(result)) fail("receiving the state archive failed");
+	}
+
+	private function executeSsh(required array sshOptions, required string target, required array remoteArguments, numeric timeout = 0) {
+		return variables.runner.run(
+			"ssh",
+			appendArguments(arguments.sshOptions, appendArguments([ arguments.target ], arguments.remoteArguments)),
+			arguments.timeout,
+			arguments.timeout > 0
+		);
+	}
+
+	private function removeRemote(required array paths, required string target, required array sshOptions) {
+		try {
+			return succeeded(executeSsh(
+				arguments.sshOptions,
+				arguments.target,
+				appendArguments([ "/bin/rm", "-f", "--" ], arguments.paths),
+				30
+			));
+		} catch (error) {
+			return false;
+		}
+	}
+
+	private function publishExclusive(required string source, required string target) {
+		if (pathTest("-e", arguments.target) || pathTest("-L", arguments.target)) {
+			fail("archive output must not already exist");
+		}
+		try {
+			filePublishExclusive(arguments.source, arguments.target);
+			return;
+		} catch (nativePublishError) {
+			var result = {};
+			try {
+				result = variables.runner.run("ln", [ arguments.source, arguments.target ]);
+			} catch (publishError) {
+				fail("publishing the validated state archive failed");
+			}
+			if (!succeeded(result) || !fileExists(arguments.target)) {
+				fail("publishing the validated state archive failed");
+			}
+			try {
+				fileDelete(arguments.source);
+			} catch (cleanupError) {
+				deleteSensitiveFile(arguments.target);
+				fail("publishing the validated state archive failed");
+			}
+		}
+	}
+
+	private function buildSshArguments(required string identityPath) {
+		return [
+			"-o", "BatchMode=yes",
+			"-o", "ConnectTimeout=10",
+			"-o", "StrictHostKeyChecking=yes",
+			"-o", "IdentitiesOnly=yes",
+			"-i", arguments.identityPath
+		];
+	}
+
+	private function secureTempFile(required string prefix, required string suffix, required string content) {
+		var path = createTempFile(getSystemSetting("TMPDIR", "/tmp"), arguments.prefix, arguments.suffix);
+		try {
+			fileSetAccessMode(path, "600");
+			fileWrite(path, arguments.content);
+			return path;
+		} catch (error) {
+			deleteSensitiveFile(path);
+			rethrow;
+		}
+	}
+
+	private function deleteSensitiveFile(string path = "") {
+		if (arguments.path == "") return;
+		if (fileExists(arguments.path) && !directoryExists(arguments.path)) fileDelete(arguments.path);
+		if (fileExists(arguments.path)) fail("could not remove a sensitive state export file");
+	}
+
+	private function remoteTempPath(required string suffix) {
+		return "/tmp/agentctl-export-" & reReplace(lCase(createUUID()), "[^a-z0-9]", "", "all") & arguments.suffix;
+	}
+
+	private function resultCode(required struct result) {
+		return structKeyExists(arguments.result, "exitCode") && !isNull(arguments.result.exitCode) ? arguments.result.exitCode : -1;
+	}
+
+	private function appendArguments(required array first, required array second) {
+		var result = [];
+		for (var value in arguments.first) arrayAppend(result, value);
+		for (var value in arguments.second) arrayAppend(result, value);
+		return result;
+	}
+
+	private function succeeded(required struct result) {
+		return structKeyExists(arguments.result, "exitCode") &&
+			!isNull(arguments.result.exitCode) &&
+			arguments.result.exitCode == 0 &&
+			(!structKeyExists(arguments.result, "timeout") || !arguments.result.timeout);
+	}
+
+	private function joinValues(required array values, required string delimiter) {
+		var result = "";
+		for (var index = 1; index <= arrayLen(arguments.values); index++) {
+			result &= (index == 1 ? "" : arguments.delimiter) & arguments.values[index];
+		}
+		return result;
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}

@@ -1,4 +1,39 @@
-# Restore state and seed a workspace
+# Export and restore state archives
+
+`agentctl agent export` creates a portable archive of a ready agent's durable `/opt/data`. `agent up` accepts that state archive and an independently created workspace archive:
+
+- `agent export --output <path>` safely stops Hermes, archives `/opt/data`, restores runtime health, and atomically publishes a new local mode-`0600` file.
+- `--state-archive <path>` restores durable Hermes state directly into empty `/opt/data`.
+- `--workspace-archive <path>` seeds project files directly into empty, disposable `/workdir`.
+
+Export does not include `/workdir`, create automatic backups, or run as part of `down`.
+
+## Export a ready agent
+
+Create the private destination directory first and choose a path that does not exist:
+
+```bash
+bundle="$HOME/.config/agentctl/agents/tutorial-agent.agent.yml"
+backup_directory="$HOME/backups/agentctl"
+mkdir -p -m 0700 "$backup_directory"
+
+agentctl agent status --file "$bundle"
+agentctl agent export \
+  --file "$bundle" \
+  --output "$backup_directory/hermes-state.tar"
+```
+
+Export requires the exact agent to be fully `ready`: one active Droplet, the expected attached volume, private SSH/Tailscale access, a running Hermes container, and healthy gateway and dashboard layers. An absent, provisioning, duplicated, mismatched, detached, or unhealthy appliance is refused before Hermes is stopped.
+
+The output path is always explicit. `agentctl` never invents a backup name, scans the current directory, or overwrites an existing file, directory, symlink, device, or other target. The parent directory must already exist.
+
+On the VM, export gives Hermes a bounded clean stop, synchronizes `/opt/data`, creates a mode-`0600` tar archive rooted directly at that directory, and omits only an empty ext4 `lost+found`. A non-empty or unsafe `lost+found` is refused rather than discarded. Hermes is restarted and both private health endpoints are checked before ordinary success.
+
+The received bytes are copied and validated through the same path, link, type, size, and SHA-256 boundary used by restore. The validated copy is synchronized and published atomically at mode `0600`. Normal and verbose output omit the archive path, digest, entries, and bytes.
+
+If transfer or validation fails, the requested output remains absent and local/remote temporary files are removed. The remote script makes a bounded restart attempt after a stop, archive, signal, or synchronization failure. If validation and publication succeed but container, Tailscale, gateway, or dashboard recovery fails, the command returns nonzero **without deleting the completed backup**; investigate the named runtime layer and preserve the archive.
+
+## Restore or seed a fresh target
 
 `agent up` accepts two independent local tar archives:
 
@@ -44,15 +79,15 @@ Safe regular files, directories, symbolic links, hard links, and executable mode
 
 The validated copies travel over SCP as mode-`0600` remote temporary files and are validated again on the host before extraction. Local and remote temporary files are removed on success or failure. Archive validation requires local `python3`; host enrollment installs its own Python.
 
-Normal output reports stages without archive paths or entries. `--verbose` may additionally report the source path, byte size, and SHA-256 digest after successful validation. Treat archives and even their paths as secret-bearing.
+Restore and seed output reports stages without archive entries. For those operator-supplied inputs, `--verbose` may additionally report the source path, byte size, and SHA-256 digest after successful validation. Export output remains stricter and omits its destination path, size, digest, and entries even with `--verbose`. Treat archives and even their paths as secret-bearing.
 
 ## State behavior
 
 A restored non-empty `/opt/data/.env` remains authoritative. Bundle initial values fill only required settings that are missing or empty. Later `up` reconciliation preserves those existing non-empty settings.
 
-State archives may contain model-provider keys, GitHub authentication, Hermes configuration, memory, and conversation history. Store them with permissions and backup controls suitable for credentials.
+State archives may contain model-provider keys, GitHub authentication, Hermes configuration, memory, and conversation history. Store them with permissions and backup controls suitable for credentials. Their mode-`0600` local file, private path, and omitted output do not make them safe to publish.
 
-`agentctl` can restore state but cannot yet export `/opt/data`. A DigitalOcean volume is working durability, not an independent backup.
+A successful export is a point-in-time portable copy. The attached DigitalOcean volume remains live working storage, not an independent backup, and export does not delete or detach it.
 
 ## Workspace behavior
 

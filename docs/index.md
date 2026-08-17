@@ -15,14 +15,14 @@ Run `agentctl docs` to reopen this website from an installed CLI. It uses `xdg-o
 ## Supported lifecycle
 
 ```text
-install → init → inspect → doctor → up → status → open/ssh → down → deliberate volume cleanup
+install → init → inspect → doctor → up → status → open/ssh → optional state export → down → deliberate volume cleanup
 ```
 
 - **Install:** download an immutable Linux executable and verify its SHA-256 checksum.
 - **Initialize:** create a mode-`0600` V2 bundle with readable intent and SOPS-encrypted secrets.
 - **Inspect and diagnose:** resolve a redacted plan and check local/provider prerequisites before mutation.
 - **Bring up:** create or reconcile one exact-name Droplet, retained volume, private firewall, and Hermes runtime.
-- **Operate:** use layered status, a Tailscale-only dashboard, root repair SSH, and rootless Compose.
+- **Operate:** use layered status, a Tailscale-only dashboard, root repair SSH, rootless Compose, and explicit portable state export.
 - **Take down:** safely stop Hermes, flush and unmount state, delete the Droplet and `/workdir`, and retain `/opt/data`.
 - **Clean up:** separately delete an unwanted detached volume to stop storage billing.
 
