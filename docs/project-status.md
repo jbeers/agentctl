@@ -1,6 +1,6 @@
 # Project status and limitations
 
-`agentctl` is currently a **public alpha**. The V2 lifecycle and cold-rebuild acceptance are complete, verified Linux `amd64` executable and Hermes runtime artifacts are public, and the published-artifact first-agent guide has passed an operator-approved clean-room exercise. The documentation website is being launched from that proven Markdown.
+`agentctl` is currently a **public alpha**. The V2 lifecycle and cold-rebuild acceptance are complete, verified Linux `amd64` executable and Hermes runtime artifacts are public, and the published-artifact first-agent guide has passed an operator-approved clean-room exercise. The proven Markdown is published at [the agentctl documentation website](https://jbeers.github.io/agentctl/).
 
 ## What is proven
 
@@ -52,4 +52,4 @@ Removing the local `agentctl` executable or encrypted bundle does not remove pro
 - [Completed V2 lifecycle](https://github.com/jbeers/agentctl/blob/main/v2/README.md)
 - [Public product roadmap](https://github.com/jbeers/agentctl/blob/main/v3/README.md)
 
-Remaining public-alpha work launches the documentation website and adds credential rotation, state export, guarded purge, and JSON status.
+Remaining public-alpha work adds credential rotation, state export, guarded purge, JSON status, and the final public-alpha end-to-end proof.
