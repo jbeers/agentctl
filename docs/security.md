@@ -87,7 +87,7 @@ When disposable compute was legitimately replaced, rerun `agent up` with the sam
 
 A state [export](archives.md#export-a-ready-agent) contains that same authority and history. `agentctl` transfers it only over private SSH, validates exact bytes, and publishes it locally at mode `0600`, but the archive and even its path remain secret-bearing. Store it separately from the working volume and never attach it to public support material.
 
-`down` blocks Droplet deletion when Hermes cannot stop, writes cannot flush, or the state filesystem cannot unmount. It does not delete the volume. Until guarded purge is released, volume deletion is a separate provider operation requiring exact identity and detached-state checks.
+`down` blocks Droplet deletion when Hermes cannot stop, writes cannot flush, or the state filesystem cannot unmount. It does not delete the volume. The separate [`agent purge`](purge.md) command requires exact typed identity, absent compute, a unique matching detached volume, repeated provider checks, and exact-ID deletion. It has no user-facing force bypass and does not claim that a backup exists.
 
 `/workdir` and ordinary Compose volumes are deleted with the Droplet. The security boundary does not include automatic Git review, commit, push, or workspace backup.
 

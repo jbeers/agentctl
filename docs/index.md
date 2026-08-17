@@ -24,7 +24,7 @@ install → init → inspect → doctor → up → status → open/ssh → optio
 - **Bring up:** create or reconcile one exact-name Droplet, retained volume, private firewall, and Hermes runtime.
 - **Operate:** use layered status, a Tailscale-only dashboard, root repair SSH, rootless Compose, and explicit portable state export.
 - **Take down:** safely stop Hermes, flush and unmount state, delete the Droplet and `/workdir`, and retain `/opt/data`.
-- **Clean up:** separately delete an unwanted detached volume to stop storage billing.
+- **Clean up:** separately run guarded, irreversible purge for an unwanted detached volume to stop storage billing.
 
 ## Product boundary
 
@@ -80,6 +80,6 @@ Read [Persistence, billing, and cleanup](persistence.md) and the plain-language 
 
 ## Current limits
 
-This project is not a generic cloud framework, hosted service, public tunnel, Kubernetes system, repository manager, or automatic backup product. There is no idle shutdown, second provider, automatic state export, guarded CLI purge, or third-party security audit yet.
+This project is not a generic cloud framework, hosted service, public tunnel, Kubernetes system, repository manager, or automatic backup product. There is no idle shutdown, second provider, automatic state export, released guarded CLI purge, or third-party security audit yet.
 
 See [Project status and limitations](project-status.md), [Troubleshooting](troubleshooting.md), and the [public roadmap](https://github.com/jbeers/agentctl/blob/main/v3/README.md).

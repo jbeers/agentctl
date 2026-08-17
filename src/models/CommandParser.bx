@@ -21,7 +21,7 @@ class {
 		}
 
 		var action = positionals[2];
-		if (action != "inspect" && action != "init" && action != "doctor" && action != "rotate" && action != "export" && action != "up" && action != "status" && action != "open" && action != "ssh" && action != "down") {
+		if (action != "inspect" && action != "init" && action != "doctor" && action != "rotate" && action != "export" && action != "purge" && action != "up" && action != "status" && action != "open" && action != "ssh" && action != "down") {
 			return invalid("unknown agent command '" & action & "'");
 		}
 		if (arrayLen(positionals) > 2) {
@@ -100,7 +100,7 @@ class {
 			result.outputPath = trim(options.output);
 			return result;
 		}
-		if (action == "doctor") {
+		if (action == "doctor" || action == "purge") {
 			return result;
 		}
 

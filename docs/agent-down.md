@@ -40,4 +40,4 @@ agentctl agent down \
 
 Temporary local identity and script files use mode `0600` and are removed on success or failure. Remote shutdown and logout scripts remove themselves and contain no bundle secrets.
 
-After `down`, the retained volume remains billable. Follow [Persistence, billing, and cleanup](persistence.md), and delete a tutorial volume only through the guarded provider procedure in the [first-agent guide](first-agent.md#delete-the-retained-tutorial-volume).
+After `down`, the retained volume remains billable. Follow [Persistence, billing, and cleanup](persistence.md), and delete unwanted state only through the separate, irreversible [`agent purge`](purge.md) workflow.

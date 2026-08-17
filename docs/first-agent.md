@@ -247,9 +247,15 @@ See [Persistence, billing, and cleanup](persistence.md) for the complete lifecyc
 
 ## Take the agent down
 
-After committing and pushing anything worth keeping:
+After committing and pushing anything worth keeping, decide whether retained Hermes state needs a portable backup. Export must run while the appliance is still fully ready:
 
 ```bash
+# Optional: run only when this state should be retained independently.
+mkdir -p -m 0700 "$HOME/backups/agentctl"
+agentctl agent export \
+  --file "$bundle" \
+  --output "$HOME/backups/agentctl/tutorial-state.tar"
+
 agentctl agent down --file "$bundle"
 ```
 
@@ -267,40 +273,17 @@ fi
 
 ## Delete the retained tutorial volume
 
-This is irreversible. Do it only for a tutorial whose retained Hermes state is no longer needed. `agentctl` does not yet provide guarded purge.
-
-List the expected regional volume and inspect its attachment field:
+This is irreversible. Do it only for a tutorial whose retained Hermes state is no longer needed or whose optional export has been independently protected.
 
 ```bash
-volume_name="agent-home-$agent_name"
-doctl compute volume list \
-  --region "$region" \
-  --format ID,Name,Region,Size,DropletIDs
+agentctl agent purge --file "$bundle"
 ```
 
-Continue only when exactly one row has the exact expected name and region, size `10`, and an empty `DropletIDs` value. Copy that row's ID, then retrieve and inspect it again:
+Before prompting, purge names `agent-home-agentctl-tutorial`, warns that Hermes state will be permanently deleted, and reminds you that `agentctl` has not verified a backup. Type the exact case-sensitive agent name `agentctl-tutorial` to continue.
 
-```bash
-read -r -p "Detached volume ID for $volume_name: " volume_id
-doctl compute volume get "$volume_id" \
-  --format ID,Name,Region,Size,DropletIDs
-read -r -p "Type $volume_name to authorize irreversible deletion: " confirmation
-if test "$confirmation" = "$volume_name"; then
-  doctl compute volume delete "$volume_id"
-else
-  printf 'Confirmation did not match; volume was not deleted.\n' >&2
-fi
-```
+Purge refuses any exact-name Droplet; a duplicate, attached, replaced, wrong-region, or wrong-size volume; malformed provider data; and provider uncertainty. It repeats provider checks after confirmation and sends only the previously established exact volume ID to deletion. There is no user-facing `--force` bypass. Run the same command again to verify the clearly reported, non-prompting `already absent` result.
 
-Do not add `--force`; answer `doctl`'s own confirmation prompt as the second guard. If the name, region, size, attachment, count, or provider response is uncertain, stop without deleting anything.
-
-Verify the exact volume no longer appears:
-
-```bash
-doctl compute volume list \
-  --region "$region" \
-  --format ID,Name,Region,Size,DropletIDs
-```
+Read [Purge retained state](purge.md) before using this command outside the disposable tutorial.
 
 ## Complete cost and identity cleanup
 

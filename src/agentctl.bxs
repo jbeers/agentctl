@@ -6,6 +6,7 @@ import src.services.DownService;
 import src.services.ExportService;
 import src.services.InitService;
 import src.services.OpenService;
+import src.services.PurgeService;
 import src.services.RotateService;
 import src.services.SshService;
 import src.services.StatusService;
@@ -26,6 +27,7 @@ function usage(boolean errorStream = false) {
 		"  agentctl agent doctor --file <bundle> [--verbose]",
 		"  agentctl agent rotate --file <bundle> --credential <name> [--remove] [--verbose]",
 		"  agentctl agent export --file <bundle> --output <archive> [--verbose]",
+		"  agentctl agent purge --file <bundle> [--verbose]",
 		"  agentctl agent up --file <bundle> [options]",
 		"  agentctl agent status --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
 		"  agentctl agent open --file <bundle> [--hostname <tailscale-hostname>] [--verbose]",
@@ -150,6 +152,20 @@ try {
 	bundles = new BundleService(runner);
 	if (command.action == "init" && structKeyExists(command, "wizard") && command.wizard) {
 		command = initWizard(bundles);
+	}
+	if (command.action == "purge") {
+		purger = new PurgeService(runner);
+		plan = bundles.resolve(command.file);
+		prepared = purger.prepare(plan);
+		if (prepared.absent) {
+			systemOutput(purger.format(prepared), true);
+			exit(0);
+		}
+		systemOutput(purger.formatWarning(prepared), true, true);
+		confirmation = cliRead("Type the exact agent name '" & plan.values.name.value & "' to confirm: ");
+		result = purger.purge(plan, prepared, confirmation, command.verbose);
+		systemOutput(purger.format(result), true);
+		exit(0);
 	}
 	if (command.action == "export") {
 		exporter = new ExportService(runner);

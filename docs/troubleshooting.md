@@ -61,8 +61,10 @@ Status reports a missing, mismatched, detached, or incorrectly attached working 
 - Confirm it is attached only to the exact managed Droplet while the agent is up.
 - Do not format, detach, resize, or delete a volume to work around an `up` failure.
 - A `down` failure while stopping Hermes, flushing writes, or unmounting state deliberately blocks Droplet deletion. Preserve both resources and investigate before retrying.
+- Purge only after `down`: any exact-name Droplet, attachment, duplicate, region/size mismatch, changed provider ID, or indeterminate response is a deliberate refusal.
+- Never work around purge with a force flag or a manually copied ID. Recheck the explicit bundle and provider state, then preserve the volume when uncertainty remains.
 
-The provider volume backs `/opt/data`; `/workdir` is not on that volume.
+The provider volume backs `/opt/data`; `/workdir` is not on that volume. See [Purge retained state](purge.md) for irreversible cleanup.
 
 ## 5. Tailscale and SSH layer
 

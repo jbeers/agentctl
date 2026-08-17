@@ -1,0 +1,201 @@
+import tests.support.FakeCommandRunner;
+
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("PurgeService", () => {
+			it("warns before confirmation and deletes only the twice-verified exact volume ID", () => {
+				var state = providerState();
+				var runner = scriptedRunner(state);
+				var service = new src.services.PurgeService(runner);
+				var plan = plan();
+				var prepared = service.prepare(plan);
+				var warning = service.formatWarning(prepared);
+
+				expect(warning).toInclude("Hermes state will be irreversibly deleted");
+				expect(warning).toInclude("Provider volume: agent-home-purge-agent");
+				expect(warning).toInclude("Verify that a state export or another backup exists");
+				expect(warning).toInclude("does not verify or claim that a backup exists");
+
+				var result = service.purge(plan, prepared, "purge-agent", true);
+				var output = service.format(result);
+				expect(state.deleteArguments).toBe([ "compute", "volume", "delete", "volume-123", "--force" ]);
+				expect(providerReadCount(runner)).toBe(6);
+				expect(output).toInclude("agent-home-purge-agent (volume-123)");
+				expect(output).toInclude("cannot be undone");
+				expect(output).toInclude("Backup status: not checked or claimed");
+				expect(output).toInclude("rechecked immediately before exact-ID deletion");
+				expect(find("provider-secret-must-not-leak", warning & output)).toBe(0);
+			});
+
+			it("reports an already-absent exact volume as a successful no-op", () => {
+				var state = providerState();
+				state.volumes = "";
+				var runner = scriptedRunner(state);
+				var service = new src.services.PurgeService(runner);
+				var prepared = service.prepare(plan());
+
+				expect(prepared.absent).toBeTrue();
+				expect(service.format(prepared)).toBe(
+					"Provider volume agent-home-purge-agent is already absent; no Hermes state was deleted."
+				);
+				expect(deleteCount(runner)).toBe(0);
+			});
+
+			it("refuses compute, duplicate, attachment, configuration, malformed, and indeterminate states", () => {
+				prepareFailure({ droplets : "101 purge-agent active" }, "agent purge requires the exact-name Droplet to be absent");
+				prepareFailure({ droplets : "101 purge-agent off" & char(10) & "102 purge-agent new" }, "agent purge requires the exact-name Droplet to be absent");
+				prepareFailure({ volumes : "volume-123 agent-home-purge-agent fra1 10" & char(10) & "volume-456 agent-home-purge-agent fra1 10" }, "multiple exact-name provider volumes exist; state purge was refused");
+				prepareFailure({ volumes : "volume-123 agent-home-purge-agent nyc3 10" }, "provider volume region or size does not match the bundle; state purge was refused");
+				prepareFailure({ volumes : "volume-123 agent-home-purge-agent fra1 20" }, "provider volume region or size does not match the bundle; state purge was refused");
+				prepareFailure({ attachments : "101" }, "provider volume is attached to a Droplet; state purge was refused");
+				prepareFailure({ volumes : "malformed-row" }, "provider returned malformed resource data; state purge was refused");
+				prepareFailure({ attachments : "unknown" }, "provider returned malformed volume attachments; state purge was refused");
+				prepareFailure({ failOperation : "volume list" }, "DigitalOcean API failure while listing DigitalOcean volumes; state purge was refused");
+			});
+
+			it("rejects blank or mismatched confirmation without another provider call", () => {
+				for (var confirmation in [ "", "PURGE-agent", "purge-agent " ]) {
+					var state = providerState();
+					var runner = scriptedRunner(state);
+					var service = new src.services.PurgeService(runner);
+					var prepared = service.prepare(plan());
+					var before = arrayLen(runner.getCalls());
+
+					expect(() => service.purge(plan(), prepared, confirmation)).toThrow(
+						message="agent purge confirmation did not exactly match the agent name; no state was deleted"
+					);
+					expect(arrayLen(runner.getCalls())).toBe(before);
+					expect(deleteCount(runner)).toBe(0);
+				}
+			});
+
+			it("refuses every provider change between inspection and exact-ID deletion", () => {
+				providerChange({ droplets : "101 purge-agent active" }, "agent purge requires the exact-name Droplet to be absent");
+				providerChange({ volumes : "volume-456 agent-home-purge-agent fra1 10" }, "provider volume changed after confirmation; deletion was refused");
+				providerChange({ volumes : "" }, "provider volume changed after confirmation; deletion was refused");
+				providerChange({ attachments : "101" }, "provider volume is attached to a Droplet; state purge was refused");
+				providerChange({ volumes : "volume-123 agent-home-purge-agent nyc3 10" }, "provider volume region or size does not match the bundle; state purge was refused");
+			});
+
+			it("sanitizes deletion failure without claiming state or backup outcomes", () => {
+				var state = providerState();
+				state.failDelete = true;
+				var runner = scriptedRunner(state);
+				var service = new src.services.PurgeService(runner);
+				var prepared = service.prepare(plan());
+				try {
+					service.purge(plan(), prepared, "purge-agent");
+					fail("purge unexpectedly succeeded");
+				} catch (error) {
+					var message = structKeyExists(error, "message") ? error.message : "";
+					expect(message).toBe("DigitalOcean API failure while deleting the exact detached provider volume; state purge was refused");
+					expect(find("provider-secret-must-not-leak", message)).toBe(0);
+				}
+			});
+		});
+	}
+
+	private function prepareFailure(required struct changes, required string expectedMessage) {
+		var state = providerState();
+		apply(state, arguments.changes);
+		var runner = scriptedRunner(state);
+		expect(() => new src.services.PurgeService(runner).prepare(plan())).toThrow(
+			message=arguments.expectedMessage
+		);
+		expect(deleteCount(runner)).toBe(0);
+	}
+
+	private function providerChange(required struct changes, required string expectedMessage) {
+		var state = providerState();
+		var runner = scriptedRunner(state);
+		var service = new src.services.PurgeService(runner);
+		var prepared = service.prepare(plan());
+		apply(state, arguments.changes);
+		expect(() => service.purge(plan(), prepared, "purge-agent")).toThrow(
+			message=arguments.expectedMessage
+		);
+		expect(deleteCount(runner)).toBe(0);
+	}
+
+	private function apply(required struct target, required struct changes) {
+		for (var key in structKeyArray(arguments.changes)) arguments.target[key] = arguments.changes[key];
+	}
+
+	private function scriptedRunner(required struct state) {
+		var handler = (executable, commandArguments, input) => {
+			if (arguments.executable != "doctl") return success();
+			var command = joinValues(arguments.commandArguments, " ");
+			if (state.failOperation != "" && find(state.failOperation, command) > 0) return failure();
+			if (find("droplet list", command) > 0) return success(state.droplets);
+			if (find("volume list", command) > 0) return success(state.volumes);
+			if (find("volume get", command) > 0) return success(state.attachments);
+			if (find("volume delete", command) > 0) {
+				state.deleteArguments = arguments.commandArguments;
+				return state.failDelete ? failure() : success();
+			}
+			return failure();
+		};
+		return new FakeCommandRunner([], true, handler);
+	}
+
+	private function providerState() {
+		return {
+			droplets : "",
+			volumes : "volume-123 agent-home-purge-agent fra1 10",
+			attachments : "",
+			failOperation : "",
+			failDelete : false,
+			deleteArguments : []
+		};
+	}
+
+	private function plan() {
+		return new src.services.BundleService().parse({
+			version : 2,
+			identity : { name : "purge-agent" },
+			compute : { region : "fra1" },
+			state : { size : "10GiB" }
+		});
+	}
+
+	private function providerReadCount(required any runner) {
+		var count = 0;
+		for (var call in arguments.runner.getCalls()) {
+			if (
+				call.executable == "doctl" &&
+				(find("list", joinValues(call.arguments, " ")) > 0 || find("volume get", joinValues(call.arguments, " ")) > 0)
+			) count++;
+		}
+		return count;
+	}
+
+	private function deleteCount(required any runner) {
+		var count = 0;
+		for (var call in arguments.runner.getCalls()) {
+			if (call.executable == "doctl" && find("volume delete", joinValues(call.arguments, " ")) > 0) count++;
+		}
+		return count;
+	}
+
+	private function success(string output = "") {
+		return { exitCode : 0, output : arguments.output, error : "", timeout : false };
+	}
+
+	private function failure() {
+		return { exitCode : 1, output : "", error : "provider-secret-must-not-leak", timeout : false };
+	}
+
+	private function joinValues(required array values, required string delimiter) {
+		var result = "";
+		for (var index = 1; index <= arrayLen(arguments.values); index++) {
+			result &= (index == 1 ? "" : arguments.delimiter) & arguments.values[index];
+		}
+		return result;
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}

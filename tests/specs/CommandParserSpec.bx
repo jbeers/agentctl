@@ -146,6 +146,25 @@ class extends="testbox.system.BaseSpec" {
 				}).error).toBe("unknown option '--hostname' for agent export");
 			});
 
+			it("parses guarded purge without a force bypass", () => {
+				var result = parser.parse({
+					positionals : [ "agent", "purge" ],
+					options : { file : "agent.yml", verbose : true }
+				});
+				expect(result.valid).toBeTrue();
+				expect(result.action).toBe("purge");
+				expect(result.file).toBe("agent.yml");
+				expect(result.verbose).toBeTrue();
+				expect(parser.parse({
+					positionals : [ "agent", "purge" ],
+					options : {}
+				}).error).toBe("agent purge requires '--file'");
+				expect(parser.parse({
+					positionals : [ "agent", "purge" ],
+					options : { file : "agent.yml", force : true }
+				}).error).toBe("unknown option '--force' for agent purge");
+			});
+
 			it("parses up with an explicit bundle and public overrides", () => {
 				var result = parser.parse({
 					positionals : [ "agent", "up" ],

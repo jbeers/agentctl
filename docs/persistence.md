@@ -48,7 +48,7 @@ A sibling container does not receive `/opt/data`, the GitHub configuration, or a
 
 `down` ends the managed Droplet but intentionally retains `agent-home-<agent-name>`. Storage charges continue. Firewalls and tags are shared management resources and are not the retained working data.
 
-Until guarded `agent purge` exists, complete cleanup requires a separate, deliberate provider-volume deletion after `down`. Follow the identity and attachment checks in [Delete the retained tutorial volume](first-agent.md#delete-the-retained-tutorial-volume); never infer that deleting the local executable or bundle cleaned up the account.
+Complete cleanup requires a separate, deliberate [`agent purge`](purge.md) after `down`. Purge repeats exact name, region, size, attachment, provider-ID, and compute-absence checks around typed agent-name confirmation. Never infer that deleting the local executable or bundle cleaned up the account.
 
 ## Backups
 
