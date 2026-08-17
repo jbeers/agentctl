@@ -144,6 +144,7 @@ class {
 		if (text == "") return matches;
 		for (var line in listToArray(text, char(10), false, true)) {
 			var values = reMatch("[^[:space:]]+", line);
+			if (arguments.columns == 4 && arrayLen(values) == 5 && values[5] == "GiB") arrayDeleteAt(values, 5);
 			if (arrayLen(values) != arguments.columns) {
 				fail("provider returned malformed resource data; state purge was refused");
 			}

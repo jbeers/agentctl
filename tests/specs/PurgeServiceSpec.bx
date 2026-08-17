@@ -28,6 +28,15 @@ class extends="testbox.system.BaseSpec" {
 				expect(find("provider-secret-must-not-leak", warning & output)).toBe(0);
 			});
 
+			it("accepts the current doctl GiB volume-size output", () => {
+				var state = providerState();
+				state.volumes = "volume-123 agent-home-purge-agent fra1 10 GiB";
+				var prepared = new src.services.PurgeService(scriptedRunner(state)).prepare(plan());
+
+				expect(prepared.absent).toBeFalse();
+				expect(prepared.id).toBe("volume-123");
+			});
+
 			it("reports an already-absent exact volume as a successful no-op", () => {
 				var state = providerState();
 				state.volumes = "";
