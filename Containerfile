@@ -17,5 +17,7 @@ ENV CONTAINER_HOST=unix:///run/podman/podman.sock \
 WORKDIR /workdir
 USER hermes
 
-LABEL org.opencontainers.image.title="Agentctl Hermes Runtime" \
-      org.opencontainers.image.description="Hermes with GitHub and Podman Compose clients for a host rootless Podman socket"
+LABEL org.opencontainers.image.title="agentctl Hermes Runtime" \
+      org.opencontainers.image.description="Hermes with GitHub and Podman Compose clients for a host rootless Podman socket" \
+      org.opencontainers.image.source="https://github.com/jbeers/agentctl" \
+      org.opencontainers.image.licenses="Apache-2.0"

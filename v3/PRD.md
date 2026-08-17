@@ -41,7 +41,7 @@ The original longer-term vision remains sequenced behind these foundations. A co
 
 1. As a prospective user, I want the product, repository, executable, website, and release artifacts to use the name `agentctl`, so that I can identify one coherent project.
 2. As a prospective user, I want one canonical public source repository, so that I know where releases, documentation, issues, and security notices originate.
-3. As a contributor, I want the old prototype preserved as history without mixing its local working files into the new project, so that useful context remains available without contaminating the release source.
+3. As a contributor, I want the current clean source to stand on its own without importing the old prototype, so that obsolete history and local working files cannot contaminate the public project.
 4. As a prospective user, I want an explicit open-source license, so that I understand how I may use and contribute to the project.
 5. As a security reporter, I want a private reporting policy and supported-version statement, so that vulnerabilities reach the maintainer responsibly.
 6. As a contributor, I want concise contribution and local-verification instructions, so that I can submit a change without reverse-engineering the development workflow.
@@ -143,10 +143,10 @@ The original longer-term vision remains sequenced behind these foundations. A co
 ### Product and repository identity
 
 - The public project name is `agentctl`. The executable, canonical repository, documentation title, release artifacts, and normal runtime image naming use that identity.
-- The current clean V2 implementation becomes the canonical source. The old Cloud Agent Coder prototype is preserved as historical source or an archived repository; its local working tree is not copied into release history.
-- The public repository is created only from a clean checkout. Agent bundles and local credentials remain operator files and are never release inputs.
-- Public-alpha versioning is separate from the version 2 bundle schema. Application releases do not require renaming or migrating valid V2 bundles.
-- License, repository visibility, and supported-version policy require explicit maintainer approval before publication.
+- The current clean V2 implementation is the canonical source. The old prototype has no preservation or migration requirement and is not copied into this project.
+- The canonical source repository is the public `https://github.com/jbeers/agentctl` project. Public release artifacts remain deferred until their acceptance slices are complete. Publication occurs only from a clean checkout; agent bundles and local credentials remain operator files and are never release inputs.
+- The first application release is `0.1.0-alpha.1`. Public-alpha versioning is separate from the version 2 bundle schema; application releases do not require renaming or migrating valid V2 bundles.
+- The project uses the Apache License 2.0. Only the latest public-alpha release is supported unless a release notice states otherwise.
 
 ### Release and runtime distribution
 

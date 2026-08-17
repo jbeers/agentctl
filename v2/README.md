@@ -1,4 +1,4 @@
-# Cloud Agent Coder v2 Roadmap
+# agentctl V2 Roadmap
 
 The canonical product contract is [PRD.md](PRD.md). Implementation work is split into local tracer-bullet issue documents under [`issues/`](issues/).
 

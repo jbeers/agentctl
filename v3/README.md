@@ -8,7 +8,7 @@ This roadmap does **not** introduce a V3 bundle schema. Existing version 2 bundl
 
 | # | Issue | Type | Status | Blocked by |
 |---|---|---|---|---|
-| 001 | [Establish the canonical public agentctl project](issues/001-establish-canonical-public-agentctl-project.md) | HITL | Pending | None |
+| 001 | [Establish the canonical public agentctl project](issues/001-establish-canonical-public-agentctl-project.md) | HITL | Complete | None |
 | 002 | [Download and verify a Linux agentctl release](issues/002-download-and-verify-linux-agentctl-release.md) | AFK | Pending | 001 |
 | 003 | [Use a supported public runtime by default](issues/003-use-supported-public-runtime-by-default.md) | HITL | Pending | 001 |
 | 004 | [Complete a clean-room first-agent guide](issues/004-complete-clean-room-first-agent-guide.md) | HITL | Pending | 002, 003 |

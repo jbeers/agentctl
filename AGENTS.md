@@ -10,8 +10,6 @@ DigitalOcean is the only current provider. Do not extract a provider framework u
 
 The completed `./v2/PRD.md` and `./v2/issues/*.md` define the current product behavior. New roadmap work should primarily follow `./v3/PRD.md` and `./v3/issues/*.md`.
 
-This project supersedes the prototype in `../cloud-agent-coder`. The PRDs are authoritative, but the prototype may be used as historical reference.
-
 
 ## Technology
 

@@ -3,3 +3,5 @@
 /tests/results/
 /.box/
 /.boxlang/
+/.vscode/
+*.agent.yml

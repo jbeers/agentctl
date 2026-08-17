@@ -1,7 +1,16 @@
 {
     "name": "agentctl",
-    "version": "2.0.0",
+    "version": "0.1.0-alpha.1",
     "slug": "agentctl",
+    "description": "Provision disposable private Hermes coding agents on DigitalOcean",
+    "homepage": "https://github.com/jbeers/agentctl",
+    "repository": {
+        "type": "git",
+        "URL": "https://github.com/jbeers/agentctl"
+    },
+    "bugs": "https://github.com/jbeers/agentctl/issues",
+    "license": "Apache-2.0",
+    "private": false,
     "type": "app",
     "language": "BoxLang",
     "devDependencies": {

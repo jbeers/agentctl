@@ -1,12 +1,12 @@
-# Cloud Agent Coder v2 Product and Behavior Specification
+# agentctl V2 Product and Behavior Specification
 
-- **Status:** Draft
+- **Status:** Complete
 - **Audience:** Operator and implementers
 - **Scope:** The next user-facing version of the existing prototype
 
 ## Problem Statement
 
-Cloud Agent Coder has proven that a disposable DigitalOcean VM can safely run a persistent Hermes coding agent behind Tailscale. The prototype can create and reconcile a Droplet, retain Hermes state on a Block Storage volume, launch Hermes under rootless Podman, expose its dashboard privately, provide SSH access, and delete compute without deleting state.
+agentctl has proven that a disposable DigitalOcean VM can safely run a persistent Hermes coding agent behind Tailscale. The prototype can create and reconcile a Droplet, retain Hermes state on a Block Storage volume, launch Hermes under rootless Podman, expose its dashboard privately, provide SSH access, and delete compute without deleting state.
 
 The current interface exposes too much of that implementation. One agent file mixes cloud-account choices, host bootstrap details, SSH identity, Hermes settings, secrets, retry tuning, and persistent-state policy. Values may come from several precedence layers and implicit file discovery. Whole-file SOPS encryption makes non-secret intent difficult to read. Lifecycle names also obscure behavior: `create` reconciles existing infrastructure, while `destroy` retains the persistent volume.
 
@@ -21,7 +21,7 @@ An operator should not need to understand the provisioning implementation to ans
 
 ## Solution
 
-V2 presents Cloud Agent Coder as an opinionated Hermes appliance rather than a generic cloud framework.
+V2 presents agentctl as an opinionated Hermes appliance rather than a generic cloud framework.
 
 The normal input is one readable, versioned agent bundle. Non-secret intent remains plaintext; only the dedicated secret subtree is encrypted with SOPS and age. The operator passes that bundle explicitly. A redacted inspection command shows every effective value, its source, derived resource names, and persistence behavior before any cloud mutation.
 

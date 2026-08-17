@@ -1,5 +1,6 @@
 # Documentation
 
+- [Project status and limitations](project-status.md)
 - [Agent bundles and inspection](agent-bundles.md)
 - [Bring up an agent](agent-up.md)
 - [Check layered agent health](agent-status.md)

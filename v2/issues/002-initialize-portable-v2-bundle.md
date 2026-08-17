@@ -5,7 +5,7 @@
 
 ## Parent
 
-[Cloud Agent Coder v2 PRD](../PRD.md)
+[agentctl V2 PRD](../PRD.md)
 
 ## What to build
 

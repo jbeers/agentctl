@@ -1,8 +1,12 @@
 # agentctl
 
-`agentctl` provisions disposable Hermes coding agents. The V2 implementation initializes, inspects, diagnoses, brings up, accesses, and safely takes down a private Hermes VM from one portable encrypted bundle.
+`agentctl` provisions disposable Hermes coding agents. The completed V2 lifecycle initializes, inspects, diagnoses, brings up, accesses, and safely takes down a private Hermes VM from one portable encrypted bundle.
 
-## Build and test
+> **Status: validated pre-public alpha.** The lifecycle has passed live cold-rebuild acceptance, but downloadable releases and the public runtime are not published yet. Review [current support and limitations](docs/project-status.md) before creating billable resources.
+
+`down` deletes compute and `/workdir` but intentionally retains the billable provider volume containing `/opt/data`. That volume is working state, not an independent backup.
+
+## Build from source and test
 
 Requirements: BoxLang, CommandBox, and the local or installed MatchBox compiler.
 
@@ -43,4 +47,14 @@ Initialization validates SOPS and local decryption before prompting for credenti
 
 See [Agent bundles and inspection](docs/agent-bundles.md), [Bring up an agent](docs/agent-up.md), [Check layered agent health](docs/agent-status.md), [Access a running agent](docs/agent-access.md), [Workspace and Compose](docs/compose-workspace.md), and [Take an agent down safely](docs/agent-down.md).
 
-The V2 lifecycle is complete. The next public-product workstream is tracked in the [V3 roadmap](v3/README.md); it does not introduce a V3 bundle schema.
+## Project information
+
+- [Status, supported boundary, costs, and limitations](docs/project-status.md)
+- [Apache License 2.0](LICENSE)
+- [Security policy](SECURITY.md)
+- [Support](SUPPORT.md)
+- [Contributing](CONTRIBUTING.md)
+- [Completed V2 lifecycle](v2/README.md)
+- [Public product roadmap](v3/README.md)
+
+The V3 roadmap does not introduce a V3 bundle schema; existing version 2 bundles remain the current product contract.
