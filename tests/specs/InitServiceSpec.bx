@@ -229,7 +229,7 @@ class extends="testbox.system.BaseSpec" {
 			"  method: openssh-over-tailscale" & char(10) &
 			"  hostname: " & arguments.name & char(10) &
 			"runtime:" & char(10) &
-			"  image: ghcr.io/jbeers/cloud-agent-coder:sha-dfb0aaa" & char(10) &
+			"  image: ghcr.io/jbeers/agentctl@sha256:28b6b1715c7d55ba50fda783c49d40030ce10a3e901bd7bd5eec2c812621053f" & char(10) &
 			"hermes:" & char(10) &
 			"  initial:" & char(10) &
 			"    dashboardUsername: operator" & char(10) &
@@ -262,7 +262,7 @@ class extends="testbox.system.BaseSpec" {
 			"  method: openssh-over-tailscale" & char(10) &
 			"  hostname: " & arguments.name & char(10) &
 			"runtime:" & char(10) &
-			"  image: ghcr.io/jbeers/cloud-agent-coder:sha-dfb0aaa" & char(10) &
+			"  image: ghcr.io/jbeers/agentctl@sha256:28b6b1715c7d55ba50fda783c49d40030ce10a3e901bd7bd5eec2c812621053f" & char(10) &
 			"hermes:" & char(10) &
 			"  initial:" & char(10) &
 			"    dashboardUsername: operator" & char(10) &

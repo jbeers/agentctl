@@ -28,6 +28,16 @@ class extends="testbox.system.BaseSpec" {
 				expect(fileRead(smoke)).toInclude("/health");
 			});
 
+			it("publishes one attested Linux amd64 runtime with immutable tags", () => {
+				var workflow = fileRead(projectPath(".github/workflows/runtime.yml"));
+
+				expect(workflow).toInclude("packages: write");
+				expect(workflow).toInclude('source_tag="$IMAGE:sha-$GITHUB_SHA"');
+				expect(workflow).toInclude("platforms: linux/amd64");
+				expect(workflow).toInclude("provenance: mode=max");
+				expect(workflow).toInclude("sbom: true");
+			});
+
 			it("keeps generated archive validation compatible with the native MatchBox runtime", () => {
 				var archiveService = fileRead(projectPath("src/services/ArchiveService.bx"));
 

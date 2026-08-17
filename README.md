@@ -2,7 +2,7 @@
 
 `agentctl` provisions disposable Hermes coding agents. The completed V2 lifecycle initializes, inspects, diagnoses, brings up, accesses, and safely takes down a private Hermes VM from one portable encrypted bundle.
 
-> **Status: public alpha.** The V2 lifecycle has passed live cold-rebuild acceptance, and a verified Linux `amd64` executable is published. The supported public runtime and clean-room onboarding remain roadmap work. Review [current support and limitations](docs/project-status.md) before creating billable resources.
+> **Status: public alpha.** The V2 lifecycle has passed live cold-rebuild acceptance, with verified public Linux `amd64` executable and Hermes runtime artifacts. Clean-room onboarding remains roadmap work. Review [current support and limitations](docs/project-status.md) before creating billable resources.
 
 `down` deletes compute and `/workdir` but intentionally retains the billable provider volume containing `/opt/data`. That volume is working state, not an independent backup.
 

@@ -52,8 +52,6 @@ Public choices can be supplied during initialization:
 version: 2
 identity:
   name: sample-agent
-runtime:
-  image: ghcr.io/example/hermes:sha-0123456
 secrets: {}
 ```
 
@@ -76,7 +74,7 @@ access:
   method: openssh-over-tailscale
   hostname: sample-agent
 runtime:
-  image: ghcr.io/example/hermes:sha-0123456
+  image: ghcr.io/jbeers/agentctl@sha256:28b6b1715c7d55ba50fda783c49d40030ce10a3e901bd7bd5eec2c812621053f
 hermes:
   initial:
     dashboardUsername: admin
@@ -93,11 +91,13 @@ The schema is strict. Unknown keys, unsupported versions, wrong types, and a mis
 | Region | `nyc3` | `--region` |
 | Compute size | `s-4vcpu-8gb` | `--size` |
 | Tailscale hostname | Agent name | `--hostname` |
-| Runtime image | `ghcr.io/jbeers/cloud-agent-coder:sha-dfb0aaa` | `--runtime-image` |
+| Runtime image | `ghcr.io/jbeers/agentctl@sha256:28b6b1715c7d55ba50fda783c49d40030ce10a3e901bd7bd5eec2c812621053f` | `--runtime-image` |
 | Access method | `openssh-over-tailscale` | None |
 | Working-state strategy | `provider-volume` | None |
 | Working-state size | `10GiB` | None |
 | Initial dashboard username | `admin` | None |
+
+The built-in runtime is a public Linux `amd64` image and pulls anonymously; the normal path needs no GHCR credential. A non-`latest` private image remains supported through `runtime.image` or `--runtime-image`, with its optional SOPS-protected `secrets.registryToken` used only for host-side pull authentication.
 
 CLI input takes precedence over a non-empty bundle value, which takes precedence over the built-in default. Inspection labels each effective value as `CLI argument`, `bundle`, or `built-in default`.
 

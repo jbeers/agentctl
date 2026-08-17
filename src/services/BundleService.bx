@@ -170,7 +170,7 @@ class {
 				computeSize : choose(compute, "size", arguments.overrides, "size", "s-4vcpu-8gb"),
 				region : choose(compute, "region", arguments.overrides, "region", "nyc3"),
 				hostname : choose(access, "hostname", arguments.overrides, "hostname", name),
-				runtimeImage : choose(runtime, "image", arguments.overrides, "runtimeImage", "ghcr.io/jbeers/cloud-agent-coder:sha-dfb0aaa"),
+				runtimeImage : choose(runtime, "image", arguments.overrides, "runtimeImage", "ghcr.io/jbeers/agentctl@sha256:28b6b1715c7d55ba50fda783c49d40030ce10a3e901bd7bd5eec2c812621053f"),
 				accessMethod : choose(access, "method", arguments.overrides, "", "openssh-over-tailscale"),
 				stateStrategy : choose(state, "strategy", arguments.overrides, "", "provider-volume"),
 				stateSize : choose(state, "size", arguments.overrides, "", "10GiB"),

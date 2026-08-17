@@ -1,6 +1,6 @@
 # Project status and limitations
 
-`agentctl` is currently a **public alpha**. The V2 lifecycle and cold-rebuild acceptance are complete, and the first verified Linux `amd64` executable is available from GitHub Releases. The supported public runtime, clean-room onboarding, and project website are still roadmap work.
+`agentctl` is currently a **public alpha**. The V2 lifecycle and cold-rebuild acceptance are complete, and verified Linux `amd64` executable and Hermes runtime artifacts are public. Clean-room onboarding and the project website are still roadmap work.
 
 ## What is proven
 
@@ -21,7 +21,7 @@ These paths passed deterministic tests and an operator-approved live DigitalOcea
 
 ## Current supported boundary
 
-- **Agent runtime:** Hermes only
+- **Agent runtime:** public digest-pinned `ghcr.io/jbeers/agentctl` image, Hermes only
 - **Compute provider:** DigitalOcean only
 - **VM host:** Ubuntu 24.04, Linux `amd64`
 - **Operator artifact:** verified native Linux `amd64` release
@@ -33,7 +33,6 @@ These paths passed deterministic tests and an operator-approved live DigitalOcea
 ## Important limitations
 
 - Linux `amd64` is the only supported operator release target.
-- The built-in runtime image predates the final live-acceptance image; select a tested immutable image explicitly until the public runtime issue is complete.
 - The retained provider volume is durable working storage, **not an independent backup**.
 - State archives can be restored, but `agentctl` cannot yet export state.
 - `down` deletes the Droplet but deliberately retains the billable volume. Complete volume deletion currently requires a separately reviewed provider operation; guarded purge is roadmap work.
@@ -53,4 +52,4 @@ Removing the local `agentctl` executable or encrypted bundle does not remove pro
 - [Completed V2 lifecycle](../v2/README.md)
 - [Public product roadmap](../v3/README.md)
 
-Public-alpha work will add reproducible releases, a public runtime, clean-room onboarding, the documentation website, credential rotation, state export, guarded purge, and JSON status.
+Remaining public-alpha work adds clean-room onboarding, the documentation website, credential rotation, state export, guarded purge, and JSON status.

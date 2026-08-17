@@ -38,7 +38,7 @@ class extends="testbox.system.BaseSpec" {
 				expect(plan.values.region.value).toBe("nyc3");
 				expect(plan.values.region.source).toBe("built-in default");
 				expect(plan.values.hostname.value).toBe("empty-option-agent");
-				expect(plan.values.runtimeImage.value).toBe("ghcr.io/jbeers/cloud-agent-coder:sha-dfb0aaa");
+				expect(plan.values.runtimeImage.value).toBe("ghcr.io/jbeers/agentctl@sha256:28b6b1715c7d55ba50fda783c49d40030ce10a3e901bd7bd5eec2c812621053f");
 				expect(plan.values.dashboardUsername.value).toBe("admin");
 			});
 

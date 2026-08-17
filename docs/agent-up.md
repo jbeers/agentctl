@@ -20,6 +20,8 @@ The same public overrides accepted by inspection are available per invocation:
   --runtime-image ghcr.io/example/hermes:sha-0123456
 ```
 
+Omit `--runtime-image` and `runtime.image` to use the public, digest-pinned `ghcr.io/jbeers/agentctl` runtime without a registry credential. The override is for an explicitly selected immutable alternative.
+
 ## First bring-up
 
 For a missing agent, `up`:

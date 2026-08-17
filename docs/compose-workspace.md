@@ -17,19 +17,21 @@ Adding `/workdir` as a safe root does not disable Hermes' built-in protected cre
 
 The selected runtime image must provide `podman-compose`. After starting Hermes and reaching gateway health, `agent up` verifies the command inside the running container before reporting success.
 
-The repository `Containerfile` builds the supported image from a pinned official Hermes image:
+The supported public Linux `amd64` package is `ghcr.io/jbeers/agentctl`. `runtime-v1` and `sha-ac78d96ecd0fe9b57ca51c930e18a69cc8301abf` identify the published release, while the built-in default pins its exact platform manifest:
 
-```bash
-podman build -t ghcr.io/example/agentctl-hermes:sha-<commit> .
-podman run --rm \
-  --entrypoint podman-compose \
-  ghcr.io/example/agentctl-hermes:sha-<commit> \
-  --version
+```text
+ghcr.io/jbeers/agentctl@sha256:28b6b1715c7d55ba50fda783c49d40030ce10a3e901bd7bd5eec2c812621053f
 ```
 
-Publish an immutable tag, then select that exact tag during `agent init`, in the bundle's `runtime.image`, or with `agent up --runtime-image`.
+The package is public and pulls anonymously. It has no `latest` tag. Its OCI publication includes the canonical source revision, SBOM, and provenance attestations. New bundles may omit `runtime.image` to use this default.
 
-The image contains a client only. It does not run a nested container daemon. Hermes receives no rootful socket, host-root mount, `--privileged`, or broad host sudo access.
+The image contains clients only. It does not run a nested container daemon. Hermes receives no rootful socket, host-root mount, `--privileged`, or broad host sudo access. An operator may still select an immutable private image in the bundle or with `--runtime-image`; the optional registry token is used only by the host's rootless Podman login and is not passed into Hermes or printed.
+
+## Runtime upgrades and rollback
+
+To upgrade or roll back, select an exact supported digest in `runtime.image` or with `--runtime-image`, inspect the resulting plan, and run `agent up` with the same bundle. Reconciliation pulls that image, replaces the Hermes container, waits for gateway health, and verifies `podman-compose` inside the running container before succeeding.
+
+Container replacement retains `/opt/data` on the provider volume. It does not turn `/workdir` into persistent storage: the existing workspace remains on the current Droplet during reconciliation, but is discarded by `down` and any cold rebuild. Commit and push work before replacing disposable compute. Rollback uses the same procedure with the prior digest; never retag an existing runtime release.
 
 ## Compose verification fixture
 

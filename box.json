@@ -1,6 +1,6 @@
 {
     "name": "agentctl",
-    "version": "0.1.0-alpha.1",
+    "version": "0.1.0-alpha.2",
     "slug": "agentctl",
     "description": "Provision disposable private Hermes coding agents on DigitalOcean",
     "homepage": "https://github.com/jbeers/agentctl",
@@ -19,7 +19,7 @@
     },
     "scripts": {
         "build": "!./scripts/build-agentctl",
-        "test": "!BOXLANG_HOME=\"$PWD/.boxlang\" ./testbox/run --envfile=/dev/null --directory=tests.specs"
+        "test": "!./scripts/test-agentctl"
     },
     "installPaths": {
         "bx-yaml": ".boxlang/modules/bx-yaml/",

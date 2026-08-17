@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+output=$(mktemp)
+summary=$(mktemp)
+trap 'rm -f "$output" "$summary"' EXIT
+
+set +e
+BOXLANG_HOME="$project_root/.boxlang" \
+  "$project_root/testbox/run" \
+  --envfile=/dev/null \
+  --directory=tests.specs 2>&1 | tee "$output"
+runner_status=${PIPESTATUS[0]}
+set -e
+
+[[ $runner_status == 0 ]] || exit "$runner_status"
+sed -E $'s/\\x1b\\[[0-9;]*m//g' "$output" > "$summary"
+grep -Fq '[ ❌ Failed: 0 ]' "$summary"
+grep -Fq '[ 💥 Errors: 0 ]' "$summary"
+if grep -Fq '[ 📦 Bundles/Suites/Specs: 0/0/0 ]' "$summary"; then
+  printf 'TestBox did not discover any tests\n' >&2
+  exit 1
+fi
