@@ -1,6 +1,6 @@
 # Contributing
 
-`agentctl` is currently developed from this repository before its public-alpha release. Contributions should preserve the completed V2 behavior and follow the active roadmap in [`v3/`](v3/README.md).
+`agentctl` is developed publicly as an alpha. Contributions should preserve the completed V2 behavior and follow the active roadmap in [`v3/`](v3/README.md).
 
 ## Development prerequisites
 

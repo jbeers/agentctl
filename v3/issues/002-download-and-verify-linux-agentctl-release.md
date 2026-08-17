@@ -15,21 +15,24 @@ The same release automation must prove the existing behavior with the pinned nat
 
 ## Acceptance criteria
 
-- [ ] Continuous integration uses explicitly pinned BoxLang, TestBox, YAML, MatchBox, and other build inputs rather than a developer-local compiler path.
-- [ ] Pull requests and release builds run the complete TestBox suite, generated-Bash syntax checks, whitespace checks, native compilation, and native smoke checks.
+- [x] Continuous integration uses explicitly pinned BoxLang, TestBox, YAML, MatchBox, and other build inputs rather than a developer-local compiler path.
+- [x] Pull requests and release builds run the complete TestBox suite, generated-Bash syntax checks, whitespace checks, native compilation, and native smoke checks.
 - [x] `agentctl --version` reports the application version and source revision without contacting a provider or reading a bundle.
 - [x] The first supported artifact is identified explicitly as Linux `amd64`; unsupported operator platforms are not implied.
-- [ ] A tagged public release publishes an executable with an immutable versioned filename and a SHA-256 checksum.
-- [ ] The downloaded executable runs `--version`, `--help`, and a redacted fixture inspection without the project development toolchain.
+- [x] A tagged public release publishes an executable with an immutable versioned filename and a SHA-256 checksum.
+- [x] The downloaded executable runs `--version`, `--help`, and a redacted fixture inspection without the project development toolchain.
 - [x] Release notes identify behavior changes, security-relevant changes, known limitations, and required operator action.
 - [x] Installation, upgrade, uninstall, and checksum-verification instructions use direct release artifacts and do not require a curl-pipe-shell installer.
 - [x] Uninstall guidance states that removing the local executable does not remove Droplets, volumes, Tailscale nodes, or other cloud resources.
 - [x] Existing version 2 bundles remain readable; no bundle migration is introduced by application release versioning.
 
-## Publication gate
+## Completion evidence
 
-Implementation and local verification are AFK. Creating the public `v0.1.0-alpha.1` tag and GitHub release requires explicit maintainer approval after the canonical CI build passes.
+- The maintainer approved publication after the canonical pinned-toolchain CI build passed.
+- GitHub release `v0.1.0-alpha.1` contains only `agentctl-0.1.0-alpha.1-linux-amd64` and its SHA-256 checksum.
+- The downloaded checksum verifies, and the downloaded executable runs `--version`, `--help`, and redacted V2 fixture inspection in an isolated environment containing no development toolchain.
+- `--version` identifies the exact tagged source revision; valid V2 fixtures remain readable without migration.
 
 ## Blocked by
 
-- [001 — Establish the canonical public agentctl project](001-establish-canonical-public-agentctl-project.md) — complete
+None — complete.

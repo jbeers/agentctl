@@ -1,6 +1,6 @@
 # Project status and limitations
 
-`agentctl` is currently a **validated pre-public alpha**. The V2 lifecycle and cold-rebuild acceptance are complete, but downloadable releases, the public runtime, and the project website are still roadmap work. Current users build from source.
+`agentctl` is currently a **public alpha**. The V2 lifecycle and cold-rebuild acceptance are complete, and the first verified Linux `amd64` executable is available from GitHub Releases. The supported public runtime, clean-room onboarding, and project website are still roadmap work.
 
 ## What is proven
 
@@ -24,7 +24,7 @@ These paths passed deterministic tests and an operator-approved live DigitalOcea
 - **Agent runtime:** Hermes only
 - **Compute provider:** DigitalOcean only
 - **VM host:** Ubuntu 24.04, Linux `amd64`
-- **Operator artifact:** source build on the development platform; Linux `amd64` is the planned first public binary
+- **Operator artifact:** verified native Linux `amd64` release
 - **Private access:** operator-managed Tailscale with MagicDNS
 - **Containers:** rootless Podman sibling containers; no nested or rootful daemon
 - **Working state:** one DigitalOcean Block Storage volume mounted at `/opt/data`
@@ -32,7 +32,7 @@ These paths passed deterministic tests and an operator-approved live DigitalOcea
 
 ## Important limitations
 
-- There is no downloadable public release yet.
+- Linux `amd64` is the only supported operator release target.
 - The built-in runtime image predates the final live-acceptance image; select a tested immutable image explicitly until the public runtime issue is complete.
 - The retained provider volume is durable working storage, **not an independent backup**.
 - State archives can be restored, but `agentctl` cannot yet export state.

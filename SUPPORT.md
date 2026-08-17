@@ -2,9 +2,7 @@
 
 ## Current support level
 
-`agentctl` is pre-public-alpha software. Support is best effort and currently covers the latest development revision on the documented supported platform. There is no service-level agreement, hosted control plane, paid support contract, or guarantee that an unreleased interface will remain unchanged.
-
-After public-alpha publication, only the latest public-alpha release will be supported unless release notes state otherwise.
+`agentctl` is public-alpha software. Support is best effort and covers only the latest public-alpha release on the documented supported platform unless release notes state otherwise. Development revisions and older alphas are unsupported. There is no service-level agreement, hosted control plane, paid support contract, or guarantee that an unreleased interface will remain unchanged.
 
 ## Before asking for help
 

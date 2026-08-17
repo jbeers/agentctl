@@ -2,9 +2,9 @@
 
 ## Project status
 
-`agentctl` is currently pre-public-alpha software. It has completed an operator-approved live acceptance exercise, but it has not received a third-party security audit and does not claim to provide a formally verified security boundary.
+`agentctl` is public-alpha software. It has completed an operator-approved live acceptance exercise, but it has not received a third-party security audit and does not claim to provide a formally verified security boundary.
 
-Until the first public release, the current development branch receives fixes on a best-effort basis. After public-alpha publication, only the latest public-alpha release will receive security fixes unless a release notice says otherwise.
+Only the latest public-alpha release receives security fixes unless a release notice says otherwise. Development revisions and older alphas are unsupported.
 
 ## Reporting a vulnerability
 
