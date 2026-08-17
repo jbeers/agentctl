@@ -15,7 +15,7 @@ Adding `/workdir` as a safe root does not disable Hermes' built-in protected cre
 
 ## Runtime image contract
 
-The selected runtime image must provide `podman-compose`. `agent up` checks the command before replacing an existing Hermes container and fails if the image does not satisfy the contract.
+The selected runtime image must provide `podman-compose`. After starting Hermes and reaching gateway health, `agent up` verifies the command inside the running container before reporting success.
 
 The repository `Containerfile` builds the supported image from a pinned official Hermes image:
 

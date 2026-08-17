@@ -32,7 +32,7 @@ For a missing agent, `up`:
 6. Creates an Ubuntu 24.04 Droplet with the generated public key, Tailscale enrollment, the unprivileged `agent` account, and rootless Podman prerequisites.
 7. Waits for OpenSSH over the selected Tailscale MagicDNS hostname.
 8. Mounts persistent state, restores requested empty targets under `/opt/data` and `/workdir`, and starts the pinned Hermes image.
-9. Returns success only after the private Hermes gateway health endpoint responds.
+9. Returns success only after the private Hermes gateway responds and the running image exposes the required Compose client.
 
 The generated SSH identity removes any requirement to select or register a DigitalOcean account SSH key. The Droplet's public IPv4 address is not used for normal access.
 
@@ -44,7 +44,7 @@ Multiple exact-name Droplets or volumes fail safely. A volume in another region,
 
 Existing non-empty values in the persistent `.env` remain authoritative on later runs. Bundle initial values fill only required settings that are missing or empty. Launcher-owned networking and container settings are reconciled separately on every `up`.
 
-Hermes starts in `/workdir`, and its canonical local terminal directory is pinned there through a read-only managed configuration layer. File and patch tools may write under `/opt/data` and `/workdir` while Hermes' protected credential-path denylist remains active. The selected runtime image must provide `podman-compose`; `up` verifies that contract before replacing the running Hermes container. See [Workspace and Compose](compose-workspace.md).
+Hermes starts in `/workdir`, and its canonical local terminal directory is pinned there through a read-only managed configuration layer. File and patch tools may write under `/opt/data` and `/workdir` while Hermes' protected credential-path denylist remains active. The selected runtime image must provide `podman-compose`; after gateway health is ready, `up` verifies that command inside the running container before reporting success. See [Workspace and Compose](compose-workspace.md).
 
 ## Restore state and seed the workspace
 

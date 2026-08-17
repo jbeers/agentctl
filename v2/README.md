@@ -17,7 +17,7 @@ These are intentionally vertical slices: each produces a user-visible, testable 
 | 007 | [Access a running agent](issues/007-access-running-agent.md) | AFK | Complete | 003 |
 | 008 | [Report layered agent health](issues/008-report-layered-agent-health.md) | AFK | Complete | 003 |
 | 009 | [Take an agent down safely](issues/009-take-agent-down-safely.md) | AFK | Complete | 003 |
-| 010 | [Prove a cold rebuild end to end](issues/010-prove-cold-rebuild.md) | HITL | Pending | 004–009 |
+| 010 | [Prove a cold rebuild end to end](issues/010-prove-cold-rebuild.md) | HITL | Complete | 004–009 |
 
 ## Type meanings
 
