@@ -15,7 +15,7 @@ Publication changes a real public package and therefore requires maintainer revi
 
 ## Acceptance criteria
 
-- [ ] The maintainer approves the public runtime package identity, visibility, and release-tag policy.
+- [x] The maintainer approves public `ghcr.io/jbeers/agentctl`, immutable `runtime-vN` and `sha-<revision>` tags, no `latest` tag, and a digest-pinned built-in default.
 - [ ] Runtime publication builds from the canonical repository for Linux `amd64` and uses the repository's normal package-write credential rather than a maintainer PAT.
 - [ ] Published release identity is immutable and can be traced to the CLI-compatible source revision.
 - [ ] The image is smoke-tested for Hermes startup, GitHub CLI, the rootless Podman client, `podman-compose`, `/workdir`, and the configured socket environment before publication succeeds.
@@ -26,6 +26,10 @@ Publication changes a real public package and therefore requires maintainer revi
 - [ ] An immutable private-image override and optional host-only registry token continue to work without exposing the token to Hermes or lifecycle output.
 - [ ] Runtime upgrade guidance explains reconciliation, retained `/opt/data`, and disposable `/workdir` behavior.
 
+## Publication gate
+
+The maintainer approved creation of the public package and the initial `runtime-v1` publication. The digest-pinned default is updated only after anonymous pull and published-image smoke checks pass.
+
 ## Blocked by
 
-- [001 — Establish the canonical public agentctl project](001-establish-canonical-public-agentctl-project.md)
+- [001 — Establish the canonical public agentctl project](001-establish-canonical-public-agentctl-project.md) — complete

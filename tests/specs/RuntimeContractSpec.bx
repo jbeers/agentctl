@@ -5,8 +5,10 @@ class extends="testbox.system.BaseSpec" {
 			it("builds from a pinned Hermes image with an explicit Compose client", () => {
 				var containerfile = fileRead(projectPath("Containerfile"));
 				var ignore = fileRead(projectPath(".containerignore"));
+				var dockerIgnore = fileRead(projectPath(".dockerignore"));
 
 				expect(trim(listFirst(ignore, char(10)))).toBe("*");
+				expect(trim(listFirst(dockerIgnore, char(10)))).toBe("*");
 				expect(containerfile).toInclude("nousresearch/hermes-agent@sha256:");
 				expect(containerfile).notToInclude("hermes-agent:latest");
 				expect(containerfile).toInclude("podman-compose");
@@ -14,7 +16,16 @@ class extends="testbox.system.BaseSpec" {
 				expect(containerfile).toInclude("DOCKER_HOST=unix:///run/podman/podman.sock");
 				expect(containerfile).toInclude("WORKDIR /workdir");
 				expect(containerfile).toInclude("USER hermes");
+				expect(containerfile).toInclude("https://github.com/jbeers/agentctl");
 				expect(containerfile).notToInclude("--privileged");
+			});
+
+			it("ships a syntax-valid Hermes gateway smoke check", () => {
+				var smoke = projectPath("scripts/smoke-runtime-image");
+				var syntax = systemExecute("bash", [ "-n", smoke ]);
+
+				expect(syntax.exitCode).toBe(0, syntax.error);
+				expect(fileRead(smoke)).toInclude("/health");
 			});
 
 			it("keeps generated archive validation compatible with the native MatchBox runtime", () => {

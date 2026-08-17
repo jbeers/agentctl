@@ -1,0 +1,121 @@
+name: Runtime image
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - Containerfile
+      - .containerignore
+      - .dockerignore
+      - scripts/smoke-runtime-image
+      - .github/workflows/runtime.yml
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Immutable runtime version tag, for example runtime-v1
+        required: true
+        default: runtime-v1
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/jbeers/agentctl
+
+jobs:
+  verify:
+    name: Build and smoke-test Linux amd64
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Build the runtime locally
+        run: docker build --file Containerfile --tag agentctl-runtime:smoke .
+
+      - name: Start Hermes and verify the appliance contract
+        run: scripts/smoke-runtime-image agentctl-runtime:smoke
+
+  publish:
+    name: Publish public runtime
+    if: github.event_name == 'workflow_dispatch'
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out the verified source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+
+      - name: Log in with the repository package credential
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Validate immutable tags
+        id: metadata
+        env:
+          RUNTIME_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ $RUNTIME_VERSION =~ ^runtime-v[1-9][0-9]*$ ]]
+          source_tag="$IMAGE:sha-$GITHUB_SHA"
+          version_tag="$IMAGE:$RUNTIME_VERSION"
+          for tag in "$source_tag" "$version_tag"; do
+            if docker buildx imagetools inspect "$tag" >/dev/null 2>&1; then
+              printf 'runtime tag already exists; refusing to replace %s\n' "$tag" >&2
+              exit 1
+            fi
+          done
+          {
+            echo 'tags<<EOF'
+            echo "$source_tag"
+            echo "$version_tag"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish Linux amd64 with attestations
+        id: publish
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: Containerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+          provenance: mode=max
+          sbom: true
+
+      - name: Make the repository package public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PATCH /user/packages/container/agentctl/visibility -f visibility=public
+
+      - name: Pull and smoke-test the published digest anonymously
+        env:
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io
+          anonymous_config=$(mktemp -d)
+          trap 'rm -rf "$anonymous_config"' EXIT
+          DOCKER_CONFIG="$anonymous_config" docker pull "$IMAGE@$DIGEST"
+          scripts/smoke-runtime-image "$IMAGE@$DIGEST"
+          if DOCKER_CONFIG="$anonymous_config" docker manifest inspect "$IMAGE:latest" >/dev/null 2>&1; then
+            printf 'the unsupported latest tag exists\n' >&2
+            exit 1
+          fi
+          printf 'public runtime: %s@%s\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

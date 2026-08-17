@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+[[ $# == 1 ]] || {
+  printf 'usage: %s <runtime-image>\n' "${0##*/}" >&2
+  exit 2
+}
+
+image=$1
+if [[ -n ${CONTAINER_ENGINE:-} ]]; then
+  engine=$CONTAINER_ENGINE
+elif docker info >/dev/null 2>&1; then
+  engine=docker
+else
+  engine=podman
+fi
+"$engine" info >/dev/null
+
+root=$(mktemp -d)
+container="agentctl-runtime-smoke-$$-$RANDOM"
+cleanup() {
+  "$engine" exec --user 0 "$container" chmod -R a+rwx /opt/data /workdir >/dev/null 2>&1 || true
+  "$engine" rm --force "$container" >/dev/null 2>&1 || true
+  if [[ $engine == podman ]]; then
+    podman unshare rm -rf "$root" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$root" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+install -d -m 0777 "$root/data" "$root/workdir"
+install -d -m 0755 "$root/config"
+cat > "$root/data/.env" <<'EOF'
+API_SERVER_KEY=agentctl-runtime-smoke-api-key
+HERMES_DASHBOARD_BASIC_AUTH_USERNAME=runtime-smoke
+HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=runtime-smoke-password
+HERMES_DASHBOARD_BASIC_AUTH_SECRET=runtime-smoke-signing-secret
+EOF
+cat > "$root/config/config.yaml" <<'EOF'
+terminal:
+  backend: local
+  cwd: /workdir
+EOF
+
+"$engine" run --detach --name "$container" \
+  --security-opt label=disable \
+  --publish 127.0.0.1::8642 \
+  --volume "$root/data:/opt/data" \
+  --volume "$root/workdir:/workdir" \
+  --volume "$root/config:/etc/hermes:ro" \
+  --env API_SERVER_ENABLED=true \
+  --env API_SERVER_HOST=0.0.0.0 \
+  --env HERMES_DASHBOARD=1 \
+  --env HERMES_MANAGED_DIR=/etc/hermes \
+  --env HERMES_WRITE_SAFE_ROOT=/opt/data:/workdir \
+  "$image" gateway run >/dev/null
+
+endpoint=$("$engine" port "$container" 8642/tcp | head -n 1)
+port=${endpoint##*:}
+ready=false
+for _ in $(seq 1 60); do
+  if curl --fail --silent "http://127.0.0.1:$port/health" >/dev/null; then
+    ready=true
+    break
+  fi
+  [[ $("$engine" inspect --format '{{.State.Running}}' "$container") == true ]] || break
+  sleep 2
+done
+if [[ $ready != true ]]; then
+  "$engine" logs "$container" >&2 || true
+  printf 'Hermes gateway did not become healthy\n' >&2
+  exit 1
+fi
+
+"$engine" exec "$container" /bin/sh -ec '
+  test "$(id -u)" = 10000
+  test "$(pwd)" = /workdir
+  touch .agentctl-runtime-smoke && rm .agentctl-runtime-smoke
+  hermes --version
+  gh --version
+  podman --version
+  podman-compose --version
+  test "$CONTAINER_HOST" = unix:///run/podman/podman.sock
+  test "$DOCKER_HOST" = unix:///run/podman/podman.sock
+  test "$GH_CONFIG_DIR" = /opt/data/home/.config/gh
+' >/dev/null
+
+printf 'runtime smoke passed: Hermes gateway, gh, Podman, Compose, /workdir, and socket environment\n'
