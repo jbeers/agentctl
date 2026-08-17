@@ -6,11 +6,11 @@ Agentctl provisions disposable VMs that run a
 persistent Hermes coding agent. VMs join Tailscale, use rootless Podman,
 and attach one persistent Block Storage volume per agent.
 
-Right now we are focusing on Digital Ocean support but will eventually add other providers. 
+DigitalOcean is the only current provider. Do not extract a provider framework until a second implementation is approved.
 
-Implementation should primarily follow the work outlined in `./v2/PRD.md` and the issues in `./v2/issues/*.md`.
+The completed `./v2/PRD.md` and `./v2/issues/*.md` define the current product behavior. New roadmap work should primarily follow `./v3/PRD.md` and `./v3/issues/*.md`.
 
-This will be a v2 implementation of the project in `../cloud-agent-coder`. The PRD is authorative but you can use the cloud-agent-coder project for reference to answer questions.
+This project supersedes the prototype in `../cloud-agent-coder`. The PRDs are authoritative, but the prototype may be used as historical reference.
 
 
 ## Technology

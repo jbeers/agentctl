@@ -1,0 +1,35 @@
+# Purge retained state safely
+
+- **Type:** HITL
+- **User stories:** 61–64
+
+## Parent
+
+[agentctl Public Product and Adoption Specification](../PRD.md)
+
+## What to build
+
+Add an explicitly destructive lifecycle command that removes only the exact retained provider volume for one bundle after compute is already absent. This closes the billing-cleanup path without changing `down`: normal teardown still retains state, while purge requires deliberate agent-name confirmation and refuses every ambiguous or attached resource state.
+
+A live acceptance deletion requires separate operator approval after resource and backup review.
+
+## Acceptance criteria
+
+- [ ] Purge requires an explicit bundle and never discovers a target from the current directory.
+- [ ] Before prompting, output states that Hermes state will be irreversibly deleted, identifies the derived volume name, and reminds the operator to verify backup status.
+- [ ] The operator must type the exact agent name; blank, mismatched, interrupted, or non-interactive input does not mutate provider resources.
+- [ ] Purge refuses while an exact-name Droplet exists, regardless of provider power state.
+- [ ] Purge requires exactly one expected volume with matching name, region, configured size, and no Droplet attachments.
+- [ ] Duplicate, attached, wrong-region, wrong-size, malformed, or provider-indeterminate results fail before deletion.
+- [ ] No `--force` path bypasses identity, attachment, duplicate, region, size, provider-health, or confirmation checks.
+- [ ] An already-absent exact volume is a successful, clearly reported no-op.
+- [ ] Only the exact provider volume identifier established before confirmation is sent to the delete command.
+- [ ] Successful output reports the deleted identifier and states that the operation cannot be undone; it does not claim that a backup exists.
+- [ ] `down` behavior and output remain non-destructive and continue to retain the volume.
+- [ ] Tests cover every refusal boundary, confirmation behavior, provider changes between inspection and deletion, exact argv construction, absent idempotence, redaction, and cleanup.
+- [ ] Documentation presents state export before purge and includes purge in final tutorial billing cleanup.
+- [ ] Operator-approved live verification inspects the detached test volume and backup status before authorizing its deletion.
+
+## Blocked by
+
+- [007 — Export portable Hermes state](007-export-portable-hermes-state.md)
