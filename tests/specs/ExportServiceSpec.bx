@@ -178,7 +178,7 @@ class extends="testbox.system.BaseSpec" {
 					expect(script).toInclude("trap restore_on_exit EXIT");
 					expect(script).toInclude("--exclude=./lost+found");
 					expect(script).toInclude('find "$mount_dir" -xdev -type l -print0');
-					expect(script).toInclude('relative_link=${link_path/"$mount_dir"/}');
+					expect(script).toInclude('relative_link=${link_path##"$mount_dir"/}');
 					expect(script).toInclude('exclude_args+=("--exclude=./$relative_link")');
 					expect(script).toInclude('tar --create --file "$archive_path" --directory "$mount_dir"');
 				} finally {

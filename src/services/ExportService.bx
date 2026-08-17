@@ -174,7 +174,7 @@ class {
 			'while IFS= read -r -d "" link_path; do',
 			'  link_target=$(readlink -- "$link_path") || exit 22',
 			'  if [[ $link_target == /* || $link_target == .. || $link_target == ../* || $link_target == */../* || $link_target == */.. ]]; then',
-			'    relative_link=${link_path/"$mount_dir"/}',
+			'    relative_link=${link_path##"$mount_dir"/}',
 			'    exclude_args+=("--exclude=./$relative_link")',
 			'  fi',
 			'done < <(find "$mount_dir" -xdev -type l -print0)',
