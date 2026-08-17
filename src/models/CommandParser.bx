@@ -21,7 +21,7 @@ class {
 		}
 
 		var action = positionals[2];
-		if (action != "inspect" && action != "init" && action != "doctor" && action != "up" && action != "status" && action != "open" && action != "ssh" && action != "down") {
+		if (action != "inspect" && action != "init" && action != "doctor" && action != "rotate" && action != "up" && action != "status" && action != "open" && action != "ssh" && action != "down") {
 			return invalid("unknown agent command '" & action & "'");
 		}
 		if (arrayLen(positionals) > 2) {
@@ -34,9 +34,11 @@ class {
 				"file,name,region,size,hostname,runtime-image,dashboard-username,age-recipient,verbose" :
 				action == "up" ?
 					"file,region,size,hostname,runtime-image,state-archive,workspace-archive,verbose" :
-					(action == "status" || action == "open" || action == "ssh" || action == "down") ?
-						"file,hostname,verbose" :
-						"file,verbose";
+					action == "rotate" ?
+						"file,credential,remove,verbose" :
+						(action == "status" || action == "open" || action == "ssh" || action == "down") ?
+							"file,hostname,verbose" :
+							"file,verbose";
 		for (var optionName in structKeyArray(options)) {
 			if (listFindNoCase(allowed, optionName) == 0) {
 				return invalid(
@@ -44,9 +46,9 @@ class {
 					(action == "inspect" ? "" : " for agent " & action)
 				);
 			}
-			if (optionName == "verbose") {
+			if (optionName == "verbose" || optionName == "remove") {
 				if (!isBoolean(options[optionName]) || !options[optionName]) {
-					return invalid("option '--verbose' does not accept a value");
+					return invalid("option '--" & optionName & "' does not accept a value");
 				}
 			} else if (!isStringValue(options[optionName]) || trim(options[optionName]) == "") {
 				return invalid("option '--" & optionName & "' requires a value");
@@ -67,6 +69,9 @@ class {
 		if (action == "init" && !structKeyExists(options, "name")) {
 			return invalid("agent init requires '--name'");
 		}
+		if (action == "rotate" && !structKeyExists(options, "credential")) {
+			return invalid("agent rotate requires '--credential'");
+		}
 
 		var result = {
 			valid : true,
@@ -75,6 +80,17 @@ class {
 			file : trim(options.file),
 			verbose : structKeyExists(options, "verbose")
 		};
+		if (action == "rotate") {
+			result.credential = lCase(trim(options.credential));
+			if (listFind("tailscale-auth-key,registry-token,dashboard-password", result.credential) == 0) {
+				return invalid("credential must be tailscale-auth-key, registry-token, or dashboard-password");
+			}
+			result.remove = structKeyExists(options, "remove");
+			if (result.remove && result.credential != "registry-token") {
+				return invalid("--remove is supported only for the registry-token credential");
+			}
+			return result;
+		}
 		if (action == "doctor") {
 			return result;
 		}

@@ -89,6 +89,40 @@ class extends="testbox.system.BaseSpec" {
 				}).error).toBe("agent init requires '--name'");
 			});
 
+			it("parses explicit credential rotation and registry-token removal", () => {
+				var replacement = parser.parse({
+					positionals : [ "agent", "rotate" ],
+					options : { file : "agent.yml", credential : "tailscale-auth-key", verbose : true }
+				});
+				expect(replacement.valid).toBeTrue();
+				expect(replacement.credential).toBe("tailscale-auth-key");
+				expect(replacement.remove).toBeFalse();
+				expect(replacement.verbose).toBeTrue();
+
+				var removal = parser.parse({
+					positionals : [ "agent", "rotate" ],
+					options : { file : "agent.yml", credential : "registry-token", remove : true }
+				});
+				expect(removal.valid).toBeTrue();
+				expect(removal.remove).toBeTrue();
+				expect(parser.parse({
+					positionals : [ "agent", "rotate" ],
+					options : { credential : "registry-token" }
+				}).error).toBe("agent rotate requires '--file'");
+				expect(parser.parse({
+					positionals : [ "agent", "rotate" ],
+					options : { file : "agent.yml" }
+				}).error).toBe("agent rotate requires '--credential'");
+				expect(parser.parse({
+					positionals : [ "agent", "rotate" ],
+					options : { file : "agent.yml", credential : "ssh-key" }
+				}).error).toBe("credential must be tailscale-auth-key, registry-token, or dashboard-password");
+				expect(parser.parse({
+					positionals : [ "agent", "rotate" ],
+					options : { file : "agent.yml", credential : "dashboard-password", remove : true }
+				}).error).toBe("--remove is supported only for the registry-token credential");
+			});
+
 			it("parses up with an explicit bundle and public overrides", () => {
 				var result = parser.parse({
 					positionals : [ "agent", "up" ],

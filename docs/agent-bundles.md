@@ -158,6 +158,10 @@ Inspection reports each archive as provided but does not print its path or read 
 
 The lifecycle summary makes retention explicit: `down` will discard the Droplet and `/workdir`, while retaining the provider volume mounted into Hermes at `/opt/data`.
 
+## Rotate encrypted credentials
+
+`agentctl agent rotate --file <bundle> --credential <name>` updates one supported encrypted value without exposing old or new credentials. It never discovers a bundle implicitly or mutates a running appliance. See [Rotate encrypted bundle credentials](credential-rotation.md) for selections, registry-token removal, atomic publication, and when a later `up` consumes each replacement.
+
 ## Doctor
 
 ```bash

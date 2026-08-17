@@ -1,0 +1,230 @@
+class {
+
+	function init(required any commandRunner, required any bundleService) {
+		variables.runner = arguments.commandRunner;
+		variables.bundles = arguments.bundleService;
+		return this;
+	}
+
+	function rotate(
+		required string path,
+		required string credential,
+		string replacement = "",
+		boolean remove = false
+	) {
+		var selected = selection(arguments.credential);
+		validateReplacement(selected, arguments.replacement, arguments.remove);
+		var target = regularTarget(arguments.path);
+		var existing = variables.bundles.resolveForUse(target);
+		if (!existing.plan.encrypted) {
+			fail("credential rotation requires a SOPS-encrypted agent bundle");
+		}
+
+		var original = "";
+		try {
+			original = fileRead(target);
+		} catch (error) {
+			fail("agent bundle does not exist or is not readable");
+		}
+		var temporary = "";
+		try {
+			temporary = createTempFile(getDirectoryFromPath(target), ".agentctl-rotate-", ".yml");
+			fileSetAccessMode(temporary, "600");
+			fileWrite(temporary, original);
+			setSecret(temporary, selected.path, arguments.remove ? "" : arguments.replacement);
+			fileSetAccessMode(temporary, "600");
+
+			var rotated = {};
+			try {
+				rotated = variables.bundles.resolveForUse(temporary);
+			} catch (error) {
+				fail("validating the rotated agent bundle failed");
+			}
+			validateResult(existing, rotated, selected.key, arguments.remove ? "" : arguments.replacement);
+
+			var current = "";
+			try {
+				current = fileRead(target);
+			} catch (error) {
+				fail("agent bundle changed during credential rotation");
+			}
+			if (hash(current, "SHA-256") != hash(original, "SHA-256")) {
+				fail("agent bundle changed during credential rotation");
+			}
+			if (regularTarget(target) != target) fail("agent bundle changed during credential rotation");
+			publishReplacement(temporary, target);
+			temporary = "";
+			return {
+				path : target,
+				credential : selected.name,
+				label : selected.label,
+				removed : arguments.remove
+			};
+		} finally {
+			removeTemporary(temporary);
+		}
+	}
+
+	function format(required struct result) {
+		return (arguments.result.removed ? "Removed " : "Rotated ") & arguments.result.label &
+			" in agent bundle '" & arguments.result.path & "'.";
+	}
+
+	private function selection(required string credential) {
+		var name = lCase(trim(arguments.credential));
+		var supported = {
+			"tailscale-auth-key" : {
+				name : "tailscale-auth-key", label : "Tailscale enrollment key",
+				key : "tailscaleAuthKey", path : "secrets.tailscaleAuthKey"
+			},
+			"registry-token" : {
+				name : "registry-token", label : "registry pull token",
+				key : "registryToken", path : "secrets.registryToken"
+			},
+			"dashboard-password" : {
+				name : "dashboard-password", label : "Hermes dashboard password",
+				key : "dashboardPassword", path : "secrets.hermes.dashboardPassword"
+			}
+		};
+		if (!structKeyExists(supported, name)) {
+			fail("credential must be tailscale-auth-key, registry-token, or dashboard-password");
+		}
+		return supported[name];
+	}
+
+	private function validateReplacement(required struct selected, required string replacement, required boolean remove) {
+		if (arguments.remove && arguments.selected.name != "registry-token") {
+			fail("--remove is supported only for the registry-token credential");
+		}
+		if (arguments.remove) {
+			if (arguments.replacement != "") fail("registry token removal does not accept a replacement value");
+			return;
+		}
+		if (
+			arguments.replacement == "" ||
+			find(char(10), arguments.replacement) > 0 ||
+			find(char(13), arguments.replacement) > 0
+		) {
+			fail(arguments.selected.label & " must not be empty or contain newlines");
+		}
+		if (
+			arguments.selected.name == "tailscale-auth-key" &&
+			arrayLen(reMatch("^tskey-auth-[A-Za-z0-9_-]+$", arguments.replacement)) == 0
+		) {
+			fail("Tailscale enrollment key has an unsupported format");
+		}
+	}
+
+	private function regularTarget(required string path) {
+		if (trim(arguments.path) == "") fail("agent rotate requires '--file'");
+		if (pathTest("-L", arguments.path) || !pathTest("-f", arguments.path)) {
+			fail("agent bundle must be a readable regular file and not a symlink");
+		}
+		try {
+			return getCanonicalPath(arguments.path);
+		} catch (error) {
+			fail("agent bundle must be a readable regular file and not a symlink");
+		}
+	}
+
+	private function pathTest(required string flag, required string path) {
+		var result = {};
+		try {
+			result = variables.runner.run("test", [ arguments.flag, arguments.path ]);
+		} catch (error) {
+			fail("could not validate the agent bundle file type");
+		}
+		return succeeded(result);
+	}
+
+	private function setSecret(required string bundlePath, required string keyPath, required string value) {
+		var result = {};
+		try {
+			result = variables.runner.run(
+				"sops",
+				[ "set", "--value-stdin", arguments.bundlePath, sopsPath(arguments.keyPath) ],
+				0, false, null, null, null, true, {}, false, jsonSerialize(arguments.value)
+			);
+		} catch (error) {
+			fail("setting the encrypted bundle credential failed");
+		}
+		if (!succeeded(result)) fail("setting the encrypted bundle credential failed");
+	}
+
+	private function sopsPath(required string keyPath) {
+		var result = "";
+		for (var segment in listToArray(arguments.keyPath, ".", false, true)) {
+			result &= "[" & char(34) & segment & char(34) & "]";
+		}
+		return result;
+	}
+
+	private function validateResult(
+		required struct existing,
+		required struct rotated,
+		required string selectedKey,
+		required string expectedValue
+	) {
+		if (!arguments.rotated.plan.encrypted) fail("validating the rotated agent bundle failed");
+		if (
+			!structKeyExists(arguments.rotated.secretValues, arguments.selectedKey) ||
+			arguments.rotated.secretValues[arguments.selectedKey] != arguments.expectedValue
+		) {
+			fail("validating the rotated agent bundle failed");
+		}
+		for (var key in structKeyArray(arguments.existing.secretValues)) {
+			if (
+				key != arguments.selectedKey &&
+				(
+					!structKeyExists(arguments.rotated.secretValues, key) ||
+					arguments.rotated.secretValues[key] != arguments.existing.secretValues[key]
+				)
+			) {
+				fail("credential rotation changed an unselected bundle value");
+			}
+		}
+		for (var key in structKeyArray(arguments.existing.plan.values)) {
+			if (
+				!structKeyExists(arguments.rotated.plan.values, key) ||
+				arguments.rotated.plan.values[key].value != arguments.existing.plan.values[key].value ||
+				arguments.rotated.plan.values[key].source != arguments.existing.plan.values[key].source
+			) {
+				fail("credential rotation changed an unselected bundle value");
+			}
+		}
+	}
+
+	private function publishReplacement(required string source, required string target) {
+		var result = {};
+		try {
+			result = variables.runner.run("mv", [ "-f", "-T", "--", arguments.source, arguments.target ]);
+		} catch (error) {
+			fail("publishing the rotated agent bundle failed");
+		}
+		if (!succeeded(result) || fileExists(arguments.source) || !fileExists(arguments.target)) {
+			fail("publishing the rotated agent bundle failed");
+		}
+	}
+
+	private function removeTemporary(string path = "") {
+		if (arguments.path == "") return;
+		try {
+			if (fileExists(arguments.path) && !directoryExists(arguments.path)) fileDelete(arguments.path);
+		} catch (error) {
+			fail("removing the temporary credential rotation file failed");
+		}
+		if (fileExists(arguments.path)) fail("removing the temporary credential rotation file failed");
+	}
+
+	private function succeeded(required struct result) {
+		return structKeyExists(arguments.result, "exitCode") &&
+			!isNull(arguments.result.exitCode) &&
+			arguments.result.exitCode == 0 &&
+			(!structKeyExists(arguments.result, "timeout") || !arguments.result.timeout);
+	}
+
+	private function fail(required string message) {
+		throw arguments.message;
+	}
+
+}

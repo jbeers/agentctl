@@ -27,6 +27,8 @@ Readable bundle fields describe intent. Only the `secrets` subtree may contain n
 
 The bundle is portable authority over the named appliance. Redacted CLI output does not make its ciphertext safe to publish. Keep it mode `0600`, outside source repositories, and backed up separately from the private age identity.
 
+Use the write-only [credential rotation](credential-rotation.md) command for Tailscale enrollment keys, optional registry tokens, and dashboard passwords. Replacements use hidden confirmation prompts and SOPS standard input; no command reads a decrypted value back to the operator.
+
 ### First-boot enrollment
 
 For a new Droplet, the generated SSH public key and Tailscale auth key enter cloud-init. The private SSH key, DigitalOcean token, age identity, model-provider keys, and GitHub credentials do not.

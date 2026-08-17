@@ -20,6 +20,7 @@ nav:
       - Access a running agent: agent-access.md
       - Workspace and Compose: compose-workspace.md
       - Restore archives: archives.md
+      - Rotate bundle credentials: credential-rotation.md
       - Take an agent down safely: agent-down.md
   - Reference:
       - Agent bundles and inspection: agent-bundles.md

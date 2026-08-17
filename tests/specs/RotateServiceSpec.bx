@@ -1,0 +1,293 @@
+import tests.support.FakeCommandRunner;
+
+class extends="testbox.system.BaseSpec" {
+
+	function run() {
+		describe("RotateService", () => {
+			it("rotates each supported credential without changing any other bundle value", () => {
+				var scenarios = [
+					{ credential : "tailscale-auth-key", key : "tailscaleAuthKey", replacement : "tskey-auth-rotated_test" },
+					{ credential : "registry-token", key : "registryToken", replacement : "rotated-registry-test" },
+					{ credential : "dashboard-password", key : "dashboardPassword", replacement : "rotated-dashboard-test" }
+				];
+				for (var scenario in scenarios) {
+					var target = fixturePath();
+					var state = fixtureState(target);
+					var runner = scriptedRunner(state);
+					var bundles = new src.services.BundleService(runner);
+					var service = new src.services.RotateService(runner, bundles);
+					try {
+						var before = fileRead(target);
+						var result = service.rotate(target, scenario.credential, scenario.replacement);
+						var expected = replace(
+							before,
+							jsonSerialize(marker(scenario.key)),
+							jsonSerialize(marker(scenario.key & "-rotated")),
+							"one"
+						);
+
+						expect(hash(fileRead(target), "SHA-256")).toBe(hash(expected, "SHA-256"));
+						expect(fileMode(target)).toBe("600");
+						expect(state.receivedViaStdin).toBeTrue();
+						expect(fileExists(state.temporary)).toBeFalse();
+						expect(find(scenario.replacement, service.format(result))).toBe(0);
+						for (var call in runner.getCalls()) {
+							expect(find(scenario.replacement, jsonSerialize(call.arguments))).toBe(0);
+						}
+
+						var inspection = bundles.inspect(target);
+						expect(find(scenario.replacement, inspection)).toBe(0);
+						expect(new src.services.DoctorService(runner, bundles).check(target).healthy).toBeTrue();
+					} finally {
+						if (fileExists(target)) fileDelete(target);
+					}
+				}
+			});
+
+			it("removes only the registry token through an explicit non-prompting branch", () => {
+				var target = fixturePath();
+				var state = fixtureState(target);
+				var runner = scriptedRunner(state);
+				var bundles = new src.services.BundleService(runner);
+				var service = new src.services.RotateService(runner, bundles);
+				try {
+					var result = service.rotate(target, "registry-token", "", true);
+
+					expect(result.removed).toBeTrue();
+					expect(state.receivedEmptyValue).toBeTrue();
+					expect(len(bundles.resolveForUse(target).secretValues.registryToken)).toBe(0);
+					expect(bundles.inspect(target)).toInclude("Registry pull token: missing");
+					expect(service.format(result)).toInclude("Removed registry pull token");
+					expect(new src.services.DoctorService(runner, bundles).check(target).healthy).toBeTrue();
+					expect(fileMode(target)).toBe("600");
+				} finally {
+					if (fileExists(target)) fileDelete(target);
+				}
+			});
+
+			it("leaves the original intact on invalid input, SOPS failure, malformed output, or publication failure", () => {
+				failureLeavesOriginal({}, "tailscale-auth-key", "invalid", "Tailscale enrollment key has an unsupported format");
+				failureLeavesOriginal({ failSet : true }, "dashboard-password", "replacement-test", "setting the encrypted bundle credential failed");
+				failureLeavesOriginal({ malformed : true }, "registry-token", "replacement-test", "validating the rotated agent bundle failed");
+				failureLeavesOriginal({ changeUnselected : true }, "registry-token", "replacement-test", "credential rotation changed an unselected bundle value");
+				failureLeavesOriginal({ failPublish : true }, "dashboard-password", "replacement-test", "publishing the rotated agent bundle failed");
+			});
+
+			it("refuses empty replacements, ambiguous removal, symlinks, and non-regular targets", () => {
+				var target = fixturePath();
+				var state = fixtureState(target);
+				var runner = scriptedRunner(state);
+				var service = new src.services.RotateService(runner, new src.services.BundleService(runner));
+				var link = target & ".link";
+				var directory = createTempDirectory(getSystemSetting("TMPDIR", "/tmp"), "agentctl-rotate-directory-");
+				try {
+					var original = hash(fileRead(target), "SHA-256");
+					expect(() => service.rotate(target, "registry-token", "")).toThrow(
+						message="registry pull token must not be empty or contain newlines"
+					);
+					expect(() => service.rotate(target, "dashboard-password", "", true)).toThrow(
+						message="--remove is supported only for the registry-token credential"
+					);
+					systemExecute("ln", [ "-s", target, link ]);
+					expect(() => service.rotate(link, "registry-token", "replacement-test")).toThrow(
+						message="agent bundle must be a readable regular file and not a symlink"
+					);
+					expect(() => service.rotate(directory, "registry-token", "replacement-test")).toThrow(
+						message="agent bundle must be a readable regular file and not a symlink"
+					);
+					expect(hash(fileRead(target), "SHA-256")).toBe(original);
+					expect(state.temporary).toBe("");
+				} finally {
+					if (fileExists(link)) fileDelete(link);
+					if (fileExists(target)) fileDelete(target);
+					if (directoryExists(directory)) directoryDelete(directory, true);
+				}
+			});
+		});
+	}
+
+	private function failureLeavesOriginal(
+		required struct flags,
+		required string credential,
+		required string replacement,
+		required string expectedMessage
+	) {
+		var target = fixturePath();
+		var state = fixtureState(target);
+		for (var key in structKeyArray(arguments.flags)) state[key] = arguments.flags[key];
+		var runner = scriptedRunner(state);
+		var service = new src.services.RotateService(runner, new src.services.BundleService(runner));
+		try {
+			var original = hash(fileRead(target), "SHA-256");
+			expect(() => service.rotate(target, arguments.credential, arguments.replacement)).toThrow(
+				message=arguments.expectedMessage
+			);
+			expect(hash(fileRead(target), "SHA-256")).toBe(original);
+			if (state.temporary != "") expect(fileExists(state.temporary)).toBeFalse();
+			for (var call in runner.getCalls()) {
+				expect(find(arguments.replacement, jsonSerialize(call.arguments))).toBe(0);
+			}
+		} finally {
+			if (fileExists(target)) fileDelete(target);
+		}
+	}
+
+	private function scriptedRunner(required struct state) {
+		var handler = (executable, commandArguments, input) => {
+			if (arguments.executable == "test") {
+				return systemExecute(arguments.executable, arguments.commandArguments);
+			}
+			if (arguments.executable == "mv") {
+				if (state.failPublish) return failure();
+				var moved = systemExecute(arguments.executable, arguments.commandArguments);
+				if (moved.exitCode == 0) state.values = duplicate(state.pending);
+				return moved;
+			}
+			if (arguments.executable == "doctl") return success("active");
+			if (arguments.executable == "ssh-keygen") return success("ssh-ed25519 AAAATESTPUBLIC agentctl:test-agent");
+			if (arguments.executable != "sops") return success();
+
+			if (arguments.commandArguments[1] == "--decrypt") {
+				var decryptPath = arguments.commandArguments[arrayLen(arguments.commandArguments)];
+				var values = state.temporary != "" && decryptPath == state.temporary ? state.pending : state.values;
+				return success(decryptedContent(values));
+			}
+			if (arguments.commandArguments[1] == "set") {
+				state.temporary = getCanonicalPath(arguments.commandArguments[3]);
+				if (state.failSet) return failure();
+				var selected = selectedKey(arguments.commandArguments[4]);
+				var value = jsonDeserialize(arguments.input);
+				state.receivedViaStdin = !isNull(arguments.input) && arguments.commandArguments[2] == "--value-stdin";
+				state.receivedEmptyValue = arguments.input == jsonSerialize("");
+				state.pending = duplicate(state.values);
+				state.pending[selected] = value;
+				if (state.changeUnselected) state.pending.dashboardSecret = "changed-unselected-test";
+				var source = fileRead(state.temporary);
+				if (state.malformed) {
+					source = replace(source, jsonSerialize(marker(selected)), jsonSerialize("plaintext-invalid"), "one");
+				} else {
+					source = replace(source, jsonSerialize(marker(selected)), jsonSerialize(marker(selected & "-rotated")), "one");
+				}
+				fileWrite(state.temporary, source);
+				return success();
+			}
+			return failure();
+		};
+		return new FakeCommandRunner([], true, handler);
+	}
+
+	private function selectedKey(required string path) {
+		if (find("tailscaleAuthKey", arguments.path) > 0) return "tailscaleAuthKey";
+		if (find("registryToken", arguments.path) > 0) return "registryToken";
+		if (find("dashboardPassword", arguments.path) > 0) return "dashboardPassword";
+		throw "unexpected rotation path";
+	}
+
+	private function fixtureState(required string target) {
+		return {
+			target : getCanonicalPath(arguments.target),
+			temporary : "",
+			values : {
+				sshPrivateKey : "-----BEGIN OPENSSH PRIVATE KEY-----" & char(10) & "fixture" & char(10) & "-----END OPENSSH PRIVATE KEY-----" & char(10),
+				tailscaleAuthKey : "tskey-auth-original_test",
+				registryToken : "original-registry-test",
+				apiServerKey : "original-api-test",
+				dashboardPassword : "original-dashboard-test",
+				dashboardSecret : "original-signing-test"
+			},
+			pending : {},
+			receivedViaStdin : false,
+			receivedEmptyValue : false,
+			failSet : false,
+			malformed : false,
+			changeUnselected : false,
+			failPublish : false
+		};
+	}
+
+	private function fixturePath() {
+		var path = createTempFile(getSystemSetting("TMPDIR", "/tmp"), "agentctl-rotate-fixture-", ".agent.yml");
+		fileSetAccessMode(path, "600");
+		fileWrite(path, encryptedContent());
+		return getCanonicalPath(path);
+	}
+
+	private function encryptedContent() {
+		return "version: 2" & char(10) &
+			"identity:" & char(10) &
+			"  name: rotate-agent" & char(10) &
+			"compute:" & char(10) &
+			"  provider: digitalocean" & char(10) &
+			"  region: fra1" & char(10) &
+			"  size: s-4vcpu-8gb" & char(10) &
+			"state:" & char(10) &
+			"  strategy: provider-volume" & char(10) &
+			"  size: 10GiB" & char(10) &
+			"access:" & char(10) &
+			"  method: openssh-over-tailscale" & char(10) &
+			"  hostname: rotate-agent" & char(10) &
+			"runtime:" & char(10) &
+			"  image: ghcr.io/jbeers/agentctl@sha256:28b6b1715c7d55ba50fda783c49d40030ce10a3e901bd7bd5eec2c812621053f" & char(10) &
+			"hermes:" & char(10) &
+			"  initial:" & char(10) &
+			"    dashboardUsername: operator" & char(10) &
+			"secrets:" & char(10) &
+			"  sshPrivateKey: " & jsonSerialize(marker("sshPrivateKey")) & char(10) &
+			"  tailscaleAuthKey: " & jsonSerialize(marker("tailscaleAuthKey")) & char(10) &
+			"  registryToken: " & jsonSerialize(marker("registryToken")) & char(10) &
+			"  hermes:" & char(10) &
+			"    apiServerKey: " & jsonSerialize(marker("apiServerKey")) & char(10) &
+			"    dashboardPassword: " & jsonSerialize(marker("dashboardPassword")) & char(10) &
+			"    dashboardSecret: " & jsonSerialize(marker("dashboardSecret")) & char(10) &
+			"sops:" & char(10) &
+			"  age: []" & char(10) &
+			"  mac: " & jsonSerialize(marker("mac")) & char(10) &
+			"  version: 3.9.4" & char(10);
+	}
+
+	private function decryptedContent(required struct values) {
+		return "version: 2" & char(10) &
+			"identity:" & char(10) &
+			"  name: rotate-agent" & char(10) &
+			"compute:" & char(10) &
+			"  provider: digitalocean" & char(10) &
+			"  region: fra1" & char(10) &
+			"  size: s-4vcpu-8gb" & char(10) &
+			"state:" & char(10) &
+			"  strategy: provider-volume" & char(10) &
+			"  size: 10GiB" & char(10) &
+			"access:" & char(10) &
+			"  method: openssh-over-tailscale" & char(10) &
+			"  hostname: rotate-agent" & char(10) &
+			"runtime:" & char(10) &
+			"  image: ghcr.io/jbeers/agentctl@sha256:28b6b1715c7d55ba50fda783c49d40030ce10a3e901bd7bd5eec2c812621053f" & char(10) &
+			"hermes:" & char(10) &
+			"  initial:" & char(10) &
+			"    dashboardUsername: operator" & char(10) &
+			"secrets:" & char(10) &
+			"  sshPrivateKey: " & jsonSerialize(arguments.values.sshPrivateKey) & char(10) &
+			"  tailscaleAuthKey: " & jsonSerialize(arguments.values.tailscaleAuthKey) & char(10) &
+			"  registryToken: " & jsonSerialize(arguments.values.registryToken) & char(10) &
+			"  hermes:" & char(10) &
+			"    apiServerKey: " & jsonSerialize(arguments.values.apiServerKey) & char(10) &
+			"    dashboardPassword: " & jsonSerialize(arguments.values.dashboardPassword) & char(10) &
+			"    dashboardSecret: " & jsonSerialize(arguments.values.dashboardSecret) & char(10);
+	}
+
+	private function marker(required string name) {
+		return "ENC[AES256_GCM,data:" & arguments.name & ",iv:test,tag:test,type:str]";
+	}
+
+	private function fileMode(required string path) {
+		return trim(systemExecute("stat", [ "-c", "%a", arguments.path ]).output);
+	}
+
+	private function success(string output = "") {
+		return { exitCode : 0, output : arguments.output, error : "", timeout : false };
+	}
+
+	private function failure() {
+		return { exitCode : 1, output : "", error : "secret-material-must-not-leak", timeout : false };
+	}
+
+}
