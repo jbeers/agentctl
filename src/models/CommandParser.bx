@@ -3,6 +3,16 @@ class {
 	function parse(required struct cli) {
 		var positionals = arguments.cli.positionals;
 		var options = arguments.cli.options;
+		if (arrayLen(positionals) > 0 && positionals[1] == "docs") {
+			if (arrayLen(positionals) > 1) return invalid("docs received too many positional arguments");
+			for (var optionName in structKeyArray(options)) {
+				if (optionName != "verbose") return invalid("unknown option '--" & optionName & "' for docs");
+				if (!isBoolean(options[optionName]) || !options[optionName]) {
+					return invalid("option '--verbose' does not accept a value");
+				}
+			}
+			return { valid : true, action : "docs", verbose : structKeyExists(options, "verbose") };
+		}
 		if (arrayLen(positionals) < 2) {
 			return invalid("a namespace and command are required");
 		}

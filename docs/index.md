@@ -7,6 +7,8 @@
 [Install the public alpha](install.md){ .md-button .md-button--primary }
 [Create your first agent](first-agent.md){ .md-button }
 
+Run `agentctl docs` to reopen this website from an installed CLI. It uses `xdg-open` on Linux or `open` on macOS and does not require an agent bundle.
+
 !!! warning "Public alpha and billable resources"
     Linux `amd64` and DigitalOcean are the only supported operator/provider path. `up` can create billable compute and storage. `down` deletes compute but deliberately retains the billable state volume. Read [cost and cleanup](persistence.md) before provisioning.
 

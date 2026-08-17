@@ -4,6 +4,17 @@ class extends="testbox.system.BaseSpec" {
 
 	function run() {
 		describe("OpenService", () => {
+			it("opens the canonical documentation website without a bundle", () => {
+				var runner = new FakeCommandRunner([], { "xdg-open" : true });
+				var service = new src.services.OpenService(runner);
+				var result = service.launchDocumentation();
+
+				expect(result.url).toBe("https://jbeers.github.io/agentctl/");
+				expect(service.format(result)).toBe("Opened agentctl documentation at https://jbeers.github.io/agentctl/.");
+				expect(runner.getCalls()[1].executable).toBe("xdg-open");
+				expect(runner.getCalls()[1].arguments).toBe([ "https://jbeers.github.io/agentctl/" ]);
+			});
+
 			it("opens the effective private dashboard hostname without doctl", () => {
 				var runner = new FakeCommandRunner([], {
 					"xdg-open" : true,

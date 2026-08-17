@@ -15,6 +15,23 @@ class {
 		}
 		if (trim(arguments.plan.values.hostname.value) == "") fail("agent bundle is missing a Tailscale hostname");
 
+		return openUrl(
+			"http://" & arguments.plan.values.hostname.value & ":9119",
+			"Hermes dashboard",
+			arguments.verbose
+		);
+	}
+
+	function launchDocumentation(boolean verbose = false) {
+		return openUrl("https://jbeers.github.io/agentctl/", "agentctl documentation", arguments.verbose);
+	}
+
+	function format(required struct result) {
+		return "Opened " & arguments.result.label & " at " & arguments.result.url &
+			(arguments.result.verbose ? " using " & arguments.result.launcher : "") & ".";
+	}
+
+	private function openUrl(required string url, required string label, boolean verbose = false) {
 		var launcher = "";
 		if (variables.runner.isAvailable("xdg-open")) {
 			launcher = "xdg-open";
@@ -24,12 +41,11 @@ class {
 			fail("no supported browser launcher found; install xdg-open or open");
 		}
 
-		var url = "http://" & arguments.plan.values.hostname.value & ":9119";
 		var result = {};
 		try {
-			result = variables.runner.run(launcher, [ url ]);
+			result = variables.runner.run(launcher, [ arguments.url ]);
 		} catch (error) {
-			fail("opening the Hermes dashboard failed");
+			fail("opening the " & arguments.label & " failed");
 		}
 		if (
 			!structKeyExists(result, "exitCode") ||
@@ -37,14 +53,14 @@ class {
 			result.exitCode != 0 ||
 			(structKeyExists(result, "timeout") && result.timeout)
 		) {
-			fail("opening the Hermes dashboard failed");
+			fail("opening the " & arguments.label & " failed");
 		}
-		return { url : url, launcher : launcher, verbose : arguments.verbose };
-	}
-
-	function format(required struct result) {
-		return "Opened Hermes dashboard at " & arguments.result.url &
-			(arguments.result.verbose ? " using " & arguments.result.launcher : "") & ".";
+		return {
+			url : arguments.url,
+			label : arguments.label,
+			launcher : launcher,
+			verbose : arguments.verbose
+		};
 	}
 
 	private function fail(required string message) {

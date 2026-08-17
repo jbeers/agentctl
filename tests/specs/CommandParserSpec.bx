@@ -6,6 +6,22 @@ class extends="testbox.system.BaseSpec" {
 				variables.parser = new src.models.CommandParser();
 			});
 
+			it("parses the top-level docs command without a bundle", () => {
+				var result = parser.parse({ positionals : [ "docs" ], options : { verbose : true } });
+
+				expect(result.valid).toBeTrue();
+				expect(result.action).toBe("docs");
+				expect(result.verbose).toBeTrue();
+				expect(parser.parse({
+					positionals : [ "docs", "extra" ],
+					options : {}
+				}).error).toBe("docs received too many positional arguments");
+				expect(parser.parse({
+					positionals : [ "docs" ],
+					options : { file : "agent.yml" }
+				}).error).toBe("unknown option '--file' for docs");
+			});
+
 			it("parses inspect with an explicit bundle", () => {
 				var result = parser.parse({
 					positionals : [ "agent", "inspect" ],

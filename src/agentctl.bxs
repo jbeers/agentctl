@@ -17,6 +17,7 @@ function usage(boolean errorStream = false) {
 		"agentctl",
 		"",
 		"Usage:",
+		"  agentctl docs [--verbose]                                Open the documentation website",
 		"  agentctl agent init                                      Interactive wizard",
 		"  agentctl agent init --name <name> --file <bundle> [options]",
 		"  agentctl agent inspect --file <bundle> [options]",
@@ -129,6 +130,12 @@ if (!command.valid) {
 
 try {
 	runner = new CommandRunner();
+	if (command.action == "docs") {
+		opener = new OpenService(runner);
+		result = opener.launchDocumentation(command.verbose);
+		systemOutput(opener.format(result), true);
+		exit(0);
+	}
 	bundles = new BundleService(runner);
 	if (command.action == "init" && structKeyExists(command, "wizard") && command.wizard) {
 		command = initWizard(bundles);
