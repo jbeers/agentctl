@@ -20,7 +20,7 @@ The completed implementation can:
 - Guard exact detached-volume purge behind repeated provider checks and typed confirmation.
 - Rebuild disposable compute while preserving `/opt/data` and discarding `/workdir`.
 
-The V2 lifecycle paths passed deterministic tests, the live DigitalOcean/Tailscale exercise, and a separate clean-room exercise using only the public `v0.1.0-alpha.2` release and public runtime. The published `v0.1.0-alpha.3` release contains credential rotation, state export, guarded purge, and status JSON after deterministic, native, real-SOPS, archive round-trip, fake-provider, and operator-approved live purge acceptance. No VM received manual repair.
+The V2 lifecycle paths passed deterministic tests, the live DigitalOcean/Tailscale exercise, and a separate clean-room exercise using only public release artifacts and the public runtime. The published `v0.1.0-alpha.3` release contains credential rotation, state export, guarded purge, and status JSON after deterministic, native, real-SOPS, archive round-trip, fake-provider, and operator-approved live purge acceptance. The final alpha3 exercise also proved provisioning, private access, inference, Compose, and protected-path behavior; it found that normal Hermes runtime symlinks made live export fail validation. The `v0.1.0-alpha.4` candidate contains the smallest export fix and is not yet published. No VM received manual repair.
 
 ## Current supported boundary
 
@@ -40,7 +40,7 @@ The V2 lifecycle paths passed deterministic tests, the live DigitalOcean/Tailsca
 - State export is deliberate and local; there is no automatic schedule, remote backup destination, or provider snapshot workflow.
 - `down` deletes the Droplet but deliberately retains the billable volume. Guarded purge has passed live exact-volume deletion, but remains irreversible and requires separate review of identity, attachment, and backup status every time.
 - `/workdir`, uncommitted source, and ordinary Compose volumes disappear with the Droplet. Hermes and the operator own Git commit and push safety.
-- `v0.1.0-alpha.3` is the current supported public release. The older `v0.1.0-alpha.2` artifact does not contain the new day-two commands or status JSON and is unsupported.
+- `v0.1.0-alpha.3` remains the current supported public release until alpha.4 passes its replacement clean-room exercise; alpha3 export should not be used for a portable backup from a runtime containing external Hermes symlinks. The older alpha.2 artifact is unsupported.
 - There is no idle shutdown, NAS control plane, admin-agent integration, public ingress, repository manager, or second cloud provider.
 - The project has not received a third-party security audit.
 
@@ -55,4 +55,4 @@ Removing the local `agentctl` executable or encrypted bundle does not remove pro
 - [Completed V2 lifecycle](https://github.com/jbeers/agentctl/blob/main/v2/README.md)
 - [Public product roadmap](https://github.com/jbeers/agentctl/blob/main/v3/README.md)
 
-Remaining public-alpha work runs the final public-alpha end-to-end proof.
+Remaining public-alpha work publishes alpha.4 after its clean-room retry, completes rotation/export/restore/cold-rebuild acceptance, and records the final public-alpha proof.

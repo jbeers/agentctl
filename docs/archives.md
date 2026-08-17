@@ -27,7 +27,7 @@ Export requires the exact agent to be fully `ready`: one active Droplet, the exp
 
 The output path is always explicit. `agentctl` never invents a backup name, scans the current directory, or overwrites an existing file, directory, symlink, device, or other target. The parent directory must already exist.
 
-On the VM, export gives Hermes a bounded clean stop, synchronizes `/opt/data`, creates a mode-`0600` tar archive rooted directly at that directory, and omits only an empty ext4 `lost+found`. A non-empty or unsafe `lost+found` is refused rather than discarded. Hermes is restarted and both private health endpoints are checked before ordinary success.
+On the VM, export gives Hermes a bounded clean stop, synchronizes `/opt/data`, creates a mode-`0600` tar archive rooted directly at that directory, and omits only an empty ext4 `lost+found`. Runtime-generated symlinks whose targets leave `/opt/data` are omitted rather than dereferenced into the image; user data is never followed outside the durable root. A non-empty or unsafe `lost+found` is refused rather than discarded. Hermes is restarted and both private health endpoints are checked before ordinary success.
 
 The received bytes are copied and validated through the same path, link, type, size, and SHA-256 boundary used by restore. The validated copy is synchronized and published atomically at mode `0600`. Normal and verbose output omit the archive path, digest, entries, and bytes.
 
