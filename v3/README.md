@@ -17,7 +17,7 @@ This roadmap does **not** introduce a V3 bundle schema. Existing version 2 bundl
 | 007 | [Export portable Hermes state](issues/007-export-portable-hermes-state.md) | AFK | Complete | 001 |
 | 008 | [Purge retained state safely](issues/008-purge-retained-state-safely.md) | HITL | Complete | 007 |
 | 009 | [Expose layered status as JSON](issues/009-expose-layered-status-as-json.md) | AFK | Complete | 001 |
-| 010 | [Prove the public alpha end to end](issues/010-prove-public-alpha-end-to-end.md) | HITL | Pending | 002–009 |
+| 010 | [Prove the public alpha end to end](issues/010-prove-public-alpha-end-to-end.md) | HITL | Complete | 002–009 |
 
 ## Type meanings
 
