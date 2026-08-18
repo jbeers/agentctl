@@ -1,6 +1,6 @@
 {
     "name": "agentctl",
-    "version": "0.1.0-alpha.5",
+    "version": "0.1.0-alpha.6",
     "slug": "agentctl",
     "description": "Provision disposable private Hermes coding agents on DigitalOcean",
     "homepage": "https://github.com/jbeers/agentctl",

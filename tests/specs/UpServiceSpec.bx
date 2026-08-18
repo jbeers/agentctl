@@ -87,11 +87,14 @@ class extends="testbox.system.BaseSpec" {
 					var normalOutput = service.format(result);
 
 					expect(output).toInclude("State archive: restored before Hermes startup");
-					expect(output).toInclude(getCanonicalPath(archive));
+					expect(output).toInclude("Archive metadata: omitted");
+					expect(output).notToInclude(getCanonicalPath(archive));
 					expect(normalOutput).toInclude("State archive: restored before Hermes startup");
 					expect(normalOutput).notToInclude(getCanonicalPath(archive));
 					expect(normalOutput).notToInclude("State archive SHA-256:");
-					expect(output).toInclude("State archive SHA-256:");
+					expect(output).notToInclude("State archive SHA-256:");
+					expect(output).notToInclude("State archive source:");
+					expect(output).notToInclude("State archive size:");
 					expect(output).notToInclude("archive-private-marker");
 					expect(state.archivePath).notToBe(archive);
 					expect(state.archiveMode).toBe("600");
@@ -123,8 +126,12 @@ class extends="testbox.system.BaseSpec" {
 					var normalOutput = service.format(result);
 
 					expect(output).toInclude("Workspace archive: seeded before Hermes startup");
+					expect(output).toInclude("Archive metadata: omitted");
 					expect(output).toInclude("Workspace persistence: /workdir remains disposable");
-					expect(output).toInclude(getCanonicalPath(archive));
+					expect(output).notToInclude(getCanonicalPath(archive));
+					expect(output).notToInclude("Workspace archive source:");
+					expect(output).notToInclude("Workspace archive size:");
+					expect(output).notToInclude("Workspace archive SHA-256:");
 					expect(output).notToInclude("workspace-private-marker");
 					expect(output).notToInclude("private-work");
 					expect(normalOutput).notToInclude(getCanonicalPath(archive));
@@ -156,6 +163,8 @@ class extends="testbox.system.BaseSpec" {
 
 					expect(output).toInclude("State archive: restored before Hermes startup");
 					expect(output).toInclude("Workspace archive: seeded before Hermes startup");
+					expect(output).toInclude("Archive metadata: omitted");
+					expect(output).notToInclude("archive-private-marker");
 					expect(state.archivePaths).toHaveLength(2);
 					expect(state.archivePaths[1]).toInclude("agentctl-state-archive-");
 					expect(state.archivePaths[2]).toInclude("agentctl-workspace-archive-");

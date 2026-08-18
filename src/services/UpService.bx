@@ -133,26 +133,14 @@ class {
 		}
 		if (arguments.result.verbose) {
 			arrayAppend(lines, "  SSH/Tailscale readiness attempts: " & arguments.result.sshAttempts);
-			appendArchiveDetails(lines, "State", arguments.result.stateArchive);
-			appendArchiveDetails(lines, "Workspace", arguments.result.workspaceArchive);
+			arrayAppend(lines, "  Archive metadata: omitted");
 		}
 		return linesToText(lines, false);
 	}
 
 	private function archiveResult(required struct prepared) {
 		if (structIsEmpty(arguments.prepared)) return {};
-		return {
-			sourcePath : arguments.prepared.sourcePath,
-			size : arguments.prepared.size,
-			digest : arguments.prepared.digest
-		};
-	}
-
-	private function appendArchiveDetails(required array lines, required string label, required struct archive) {
-		if (structIsEmpty(arguments.archive)) return;
-		arrayAppend(arguments.lines, "  " & arguments.label & " archive source: " & arguments.archive.sourcePath);
-		arrayAppend(arguments.lines, "  " & arguments.label & " archive size: " & arguments.archive.size & " bytes");
-		arrayAppend(arguments.lines, "  " & arguments.label & " archive SHA-256: " & arguments.archive.digest);
+		return { accepted : true };
 	}
 
 	function buildSshArguments(required string identityPath) {

@@ -14,7 +14,7 @@ uname -m
 Choose an exact release version rather than a moving `latest` URL. For the current supported public alpha:
 
 ```bash
-version=0.1.0-alpha.5
+version=0.1.0-alpha.6
 artifact="agentctl-${version}-linux-amd64"
 base="https://github.com/jbeers/agentctl/releases/download/v${version}"
 
